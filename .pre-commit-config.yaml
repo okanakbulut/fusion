@@ -1,0 +1,57 @@
+default_language_version:
+  python: '3.12'
+repos:
+- hooks:
+  - args:
+    - --strict
+    - feat
+    - fix
+    - chore
+    - test
+    - bump
+    - custom
+    # TODO: add more message types here and remove `custom`
+    id: conventional-pre-commit
+    stages:
+    - commit-msg
+  repo: https://github.com/compilerla/conventional-pre-commit
+  rev: v3.0.0
+- hooks:
+  - id: check-yaml
+  - id: end-of-file-fixer
+  - id: trailing-whitespace
+  repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v2.3.0
+- hooks:
+  - args:
+    - --fix
+    id: ruff
+  - id: ruff-format
+  repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.1.8
+- hooks:
+  - additional_dependencies:
+    - tokenize-rt==3.2.0
+    id: mypy
+  repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.7.1
+- hooks:
+  - additional_dependencies:
+    - bandit[toml]
+    args:
+    - -c
+    - pyproject.toml
+    - --exclude
+    - tests/*
+    id: bandit
+  repo: https://github.com/PyCQA/bandit
+  rev: 1.7.6
+
+- repo: local
+  hooks:
+  - id: pytest-check
+    name: pytest-check
+    entry: pytest --cov
+    language: system
+    pass_filenames: false
+    always_run: true
