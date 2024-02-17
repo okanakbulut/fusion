@@ -1,7 +1,7 @@
 [project]
 name = "fusion"
-version = "0.2.0"
-description = "Betterwork's python api library"
+version = "0.1.0"
+description = "Fusion is a web framework for building APIs with Python."
 readme = "README.md"
 requires-python = ">=3.12"
 
@@ -11,11 +11,11 @@ dependencies = ["msgspec==0.18.5", "starlette==0.34.0"]
 dev = [
     "coverage[toml]>=6.5",
     "pytest",
+    "pytest-asyncio",
     "pytest-cov",
     "pytest-mock",
     "pre-commit==3.6.0",
     "ruff==0.1.8",
-    "mypy==1.8.0",
     "commitizen==3.13.0",
     "ipython",
     "httpx",
@@ -28,6 +28,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 100
+indent-width = 4
+tab-size = 4
 target-version = "py312"
 src = ["src", "tests"]
 unfixable = ["F401"]
@@ -48,16 +50,9 @@ extend-ignore = ["F401"]
 convention = "google"
 
 [tool.ruff.lint.mccabe]
-# Flag errors (`C901`) whenever the complexity level exceeds 11.
-max-complexity = 15
+# Flag errors (`C901`) whenever the complexity level exceeds 10.
+max-complexity = 10
 
-
-[tool.mypy]
-python_version = "3.12"
-warn_return_any = true
-warn_unused_configs = true
-ignore_missing_imports = true
-packages = ["fusion"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
@@ -100,3 +95,4 @@ skip_covered = true
 venvPath = "/Users/okanakbulut/.virtualenvs"
 venv = "fusion"
 pythonVersion = "3.12"
+exclude = ["**/__init__.py", "**/__pycache__"]

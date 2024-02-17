@@ -1,9 +1,7 @@
-from typing import Any, Mapping
+from typing import Any
 
-from msgspec import json, msgpack, yaml
 import msgspec
 from starlette.responses import Response as StarletteResponse
-
 
 
 class Response(StarletteResponse):
