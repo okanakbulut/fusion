@@ -1,5 +1,3 @@
-import typing
-
 import msgspec
 from starlette.middleware import Middleware
 from starlette.testclient import TestClient
@@ -136,8 +134,62 @@ def test_struct_header_param():
         async def get(self, auth: HeaderStruct[Auth]) -> str:
             return f"Auth {auth.authorization} {auth.x_api_version}"
 
-    app = Application(routes=[Route("/", MyEndpoint, methods=["GET"])])
+    app = Application(
+        routes=[Route("/", MyEndpoint, methods=["GET"])],
+        middleware=[
+            Middleware(ProblemDetail),
+        ],
+    )
     client = TestClient(app)
+
     response = client.get("/", headers={"Authorization": "Bearer xyz", "X-Api-Version": "1.0"})
     assert response.status_code == 200
     assert response.text == "Auth Bearer xyz 1.0"
+
+    response = client.get("/", headers={"Authorization": "Bearer xyz"})
+    assert response.status_code == 400
+    assert response.json() == {
+        "status": 400,
+        "title": "Bad Request",
+        "errors": [
+            {
+                "detail": "Object missing required field `x_api_version`",
+                "header": "auth",
+            }
+        ],
+    }
+
+
+def test_request_body():
+    class Person(msgspec.Struct):
+        name: str
+        title: str
+
+    class MyEndpoint(Endpoint):
+        async def post(self, person: Person) -> str:
+            return f"Hello {person.title} {person.name}"
+
+    app = Application(
+        routes=[Route("/", MyEndpoint, methods=["POST"])],
+        middleware=[
+            Middleware(ProblemDetail),
+        ],
+    )
+    client = TestClient(app)
+
+    response = client.post("/", json={"name": "John", "title": "Mr."})
+    assert response.status_code == 200
+    assert response.text == "Hello Mr. John"
+
+    response = client.post("/", json={"name": "John"})
+    assert response.status_code == 400
+    assert response.json() == {
+        "status": 400,
+        "title": "Bad Request",
+        "errors": [
+            {
+                "detail": "Object missing required field `title`",
+                "pointer": "title",
+            }
+        ],
+    }

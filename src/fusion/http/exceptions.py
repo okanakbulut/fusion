@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -27,6 +27,11 @@ class ValidationError(Exception):
 @dataclass(slots=True)
 class QueryParamError(ValidationError):
     parameter: str
+
+
+@dataclass(slots=True)
+class QueryPathError(QueryParamError):
+    pass
 
 
 @dataclass(slots=True)

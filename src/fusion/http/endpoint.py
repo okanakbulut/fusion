@@ -1,11 +1,12 @@
 import inspect
-import re
 import typing
 from typing import Any, Callable, ClassVar, Coroutine
 
+from starlette.exceptions import HTTPException
+
 from fusion.di import Injectable
-from fusion.http.decoder import Decoder
-from fusion.http.exceptions import BadRequestException, HttpException, ValidationError
+from fusion.http.decoder import RequestDecoder
+from fusion.http.exceptions import BadRequestException, ValidationError
 from fusion.http.request import Request
 from fusion.http.response import Response
 
@@ -21,7 +22,7 @@ class Endpoint(Injectable):
             handler: Callable[..., Any],
         ) -> Callable[[Endpoint, Request], Coroutine[Any, Any, Response]]:
             signature = inspect.signature(handler)
-            parameters: list[tuple[str, Decoder]] = []
+            parameters: list[tuple[str, RequestDecoder]] = []
             for _, param in signature.parameters.items():
                 if param.name == "self":
                     continue
@@ -29,10 +30,10 @@ class Endpoint(Injectable):
                     if isinstance(origin, typing.TypeAliasType):
                         # if metadata := getattr(origin, "__metadata__", None):
                         DecoderType = origin.__value__.__metadata__[0]
-                        if issubclass(DecoderType, Decoder):
+                        if issubclass(DecoderType, RequestDecoder):
                             parameters.append((param.name, DecoderType(param)))
                 else:
-                    raise TypeError(f"Unsupported parameter type: {param.annotation}")
+                    parameters.append((param.name, RequestDecoder(param)))
 
             # scope: Scope, receive: Receive, send: Send
             async def wrapped(this: Endpoint, request: Request) -> Response:
@@ -40,7 +41,7 @@ class Endpoint(Injectable):
                 errors: list[ValidationError] = []
                 args: list[typing.Any] = []
 
-                for name, decoder in parameters:
+                for _, decoder in parameters:
                     try:
                         args.append(await decoder(request))
                     except ValidationError as error:
