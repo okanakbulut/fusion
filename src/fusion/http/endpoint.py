@@ -1,21 +1,11 @@
 import inspect
+import re
 import typing
 from typing import Any, Callable, ClassVar, Coroutine
 
-import msgspec
-from starlette.exceptions import HTTPException
-
 from fusion.di import Injectable
-
-# from starlette.requests import Request
-from fusion.http.annotations import (
-    Cookie,
-    Header,
-    PathParam,
-    QueryParam,
-    RequestBody,
-    decode,
-)
+from fusion.http.decoder import Decoder
+from fusion.http.exceptions import BadRequestException, HttpException, ValidationError
 from fusion.http.request import Request
 from fusion.http.response import Response
 
@@ -24,31 +14,40 @@ class Endpoint(Injectable):
     _allowed_methods: ClassVar[list[str]] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Wrap endpoint methods to decode parameters and encode results."""
         super().__init_subclass__(**kwargs)
 
         def wrap(
             handler: Callable[..., Any],
         ) -> Callable[[Endpoint, Request], Coroutine[Any, Any, Response]]:
             signature = inspect.signature(handler)
-            params: list[inspect.Parameter] = []
+            parameters: list[tuple[str, Decoder]] = []
             for _, param in signature.parameters.items():
                 if param.name == "self":
                     continue
-                if param.annotation is Request:
-                    params.append(param)
-                    continue
-                if origin := getattr(param.annotation, "__origin__", None):
-                    if origin in (QueryParam, PathParam, Header, RequestBody, Cookie):
-                        params.append(param)
-                        continue
-                raise TypeError(f"Unsupported parameter type: {param.annotation}")
+                elif origin := getattr(param.annotation, "__origin__", None):
+                    if isinstance(origin, typing.TypeAliasType):
+                        # if metadata := getattr(origin, "__metadata__", None):
+                        DecoderType = origin.__value__.__metadata__[0]
+                        if issubclass(DecoderType, Decoder):
+                            parameters.append((param.name, DecoderType(param)))
+                else:
+                    raise TypeError(f"Unsupported parameter type: {param.annotation}")
 
+            # scope: Scope, receive: Receive, send: Send
             async def wrapped(this: Endpoint, request: Request) -> Response:
-                try:
-                    args: list[typing.Any] = [await decode(param, request) for param in params]
-                except msgspec.ValidationError as e:
-                    return Response(str(e), status_code=400)
+                nonlocal parameters
+                errors: list[ValidationError] = []
+                args: list[typing.Any] = []
 
+                for name, decoder in parameters:
+                    try:
+                        args.append(await decoder(request))
+                    except ValidationError as error:
+                        errors.append(error)
+
+                if errors:
+                    raise BadRequestException(errors=errors)
                 return Response(await handler(this, *args))
 
             return wrapped

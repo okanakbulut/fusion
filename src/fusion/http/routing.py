@@ -20,15 +20,6 @@ class Route(StarletteRoute):
         include_in_schema: bool = True,
         middleware: typing.Optional[typing.Sequence[Middleware]] = None,
     ) -> None:
-        super().__init__(
-            path,
-            endpoint,
-            methods=methods,
-            name=name,
-            include_in_schema=include_in_schema,
-            middleware=middleware,
-        )
-
         async def wrapped(scope: Scope, receive: Receive, send: Send) -> None:
             nonlocal endpoint
             request = Request(scope, receive, send)
@@ -38,4 +29,15 @@ class Route(StarletteRoute):
                 response = await ep.dispatch(request)
                 await response(scope, receive, send)
 
+        super().__init__(
+            path,
+            endpoint,
+            methods=methods,
+            name=name,
+            include_in_schema=include_in_schema,
+            middleware=middleware,
+        )
         self.app = wrapped
+        if middleware is not None:
+            for cls, args, kwargs in reversed(middleware):
+                self.app = cls(app=self.app, *args, **kwargs)

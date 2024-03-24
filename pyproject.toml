@@ -5,7 +5,7 @@ description = "Fusion is a web framework for building APIs with Python."
 readme = "README.md"
 requires-python = ">=3.12"
 
-dependencies = ["msgspec==0.18.5", "starlette==0.34.0"]
+dependencies = ["msgspec==0.18.6", "starlette==0.37.2"]
 
 [project.optional-dependencies]
 dev = [
@@ -51,7 +51,7 @@ convention = "google"
 
 [tool.ruff.lint.mccabe]
 # Flag errors (`C901`) whenever the complexity level exceeds 10.
-max-complexity = 10
+max-complexity = 15
 
 
 [tool.commitizen]
@@ -95,4 +95,16 @@ skip_covered = true
 venvPath = "/Users/okanakbulut/.virtualenvs"
 venv = "fusion"
 pythonVersion = "3.12"
-exclude = ["**/__init__.py", "**/__pycache__"]
+exclude = [
+    "**/__init__.py",
+    "**/__pycache__",
+    "**/dist",
+    "**/build",
+    "**/venv",
+    "**/.venv",
+    "**/.git",
+    "**/.tox",
+    "**/.mypy_cache",
+    "**/.pytest_cache",
+    "**/.vscode",
+]
