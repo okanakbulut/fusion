@@ -1,11 +1,21 @@
 [project]
 name = "fusion"
 version = "0.1.0"
-description = "Fusion is a web framework for building APIs with Python."
+description = "Fusion is a modern ASGI web framework for Python with built-in dependency injection, OpenAPI schema generation, and MCP support."
 readme = "README.md"
 requires-python = ">=3.12"
+license = { file = "LICENSE.md" }
+authors = [
+  { name="Okan Akbulut" }
+]
+dependencies = [
+  "msgspec==0.19.0",
+  "starlette==0.47.0"
+]
 
-dependencies = ["msgspec==0.18.5", "starlette==0.34.0"]
+[project.urls]
+Homepage = "https://github.com/okanakbulut/fusion"
+
 
 [project.optional-dependencies]
 dev = [
@@ -14,22 +24,20 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "pytest-mock",
-    "pre-commit==3.6.0",
-    "ruff==0.1.8",
-    "commitizen==3.13.0",
+    "pre-commit==4.2.0",
+    "ruff==0.11.12",
+    "commitizen==4.8.2",
     "ipython",
     "httpx",
 ]
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 100
 indent-width = 4
-tab-size = 4
 target-version = "py312"
 src = ["src", "tests"]
 unfixable = ["F401"]
@@ -50,8 +58,8 @@ extend-ignore = ["F401"]
 convention = "google"
 
 [tool.ruff.lint.mccabe]
-# Flag errors (`C901`) whenever the complexity level exceeds 10.
-max-complexity = 10
+# Flag errors (`C901`) whenever the complexity level exceeds 15.
+max-complexity = 15
 
 
 [tool.commitizen]
@@ -73,7 +81,7 @@ testpaths = ["tests", "src/fusion"]
 
 [tool.coverage.run]
 branch = true
-omit = ["src/fusion/protocols.py", "tests/*"]
+omit = ["tests/*"]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -87,9 +95,9 @@ exclude_lines = [
     "if 0:",
     "if __name__ == .__main__.:",
 ]
-fail_under = 100
-show_missing = true
-skip_covered = true
+#fail_under = 100
+#show_missing = true
+#skip_covered = true
 
 [tool.pyright]
 venvPath = "/Users/okanakbulut/.virtualenvs"

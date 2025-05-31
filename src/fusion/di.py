@@ -1,119 +1,102 @@
-import inspect
-from collections import defaultdict, deque
 from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from graphlib import TopologicalSorter
-from typing import Annotated, Any, Callable, ClassVar, Self, Union
+from contextlib import AbstractAsyncContextManager
+from functools import wraps
+from typing import Any, Callable, ClassVar, Self, TypeVar, get_origin
 
-import msgspec
+from msgspec import Struct as Object
 
-type Inject[T] = Annotated[T, "Inject"]
-type Provider = Callable[..., AsyncIterator[Any]]
-type WrappedProvider = Callable[..., AbstractAsyncContextManager[Any]]
-type Constructor = Union[type["Injectable"], WrappedProvider]
+from fusion.resolvers import (
+    Constructor,
+    FactoryResolver,
+    InjectableResolver,
+    Resolver,
+    __factories__,
+)
 
-
-class ExecutionContext(AsyncExitStack):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.instances: dict[type, Any] = {}
-
-    async def enter_async_context(self, cm: AbstractAsyncContextManager[Any]) -> Any:
-        instance = await super().enter_async_context(cm)
-        self.instances[instance.__class__] = instance
-        return instance
-
-    def __setitem__(self, key: type, value: Any) -> None:
-        self.instances[key] = value
-
-    def __getitem__(self, key: type) -> Any:
-        return self.instances[key]
-
-    def __contains__(self, key: type) -> bool:
-        return key in self.instances
+T = TypeVar("T")
 
 
-class Injectable(msgspec.Struct):
-    __dependencies__: ClassVar[dict[Constructor, list[Constructor]]] = defaultdict(list)
+class Injectable(Object):
+    __resolvers__: ClassVar[list[Resolver]]
+
+    def __init_subclass__(cls, *args, **kwargs):
+        cls.__resolvers__ = build_resolvers(cls.__annotations__)
+        super().__init_subclass__(*args, **kwargs)
 
     @classmethod
-    def _dependencies(cls):
-        "Return the topologically sorted dependencies of the class."
-        graph: dict[Constructor, list[Constructor]] = {}
-        dependencies = deque(Injectable.__dependencies__[cls])
-        while dependencies:
-            dependency = dependencies.popleft()
-            if dependency in graph:
-                continue
-            graph[dependency] = Injectable.__dependencies__[dependency]
-            for dep in graph[dependency]:
-                if dep not in graph:
-                    dependencies.append(dep)
-        # topological sort the graph
-        # t: TopologicalSorter[Constructor] = TopologicalSorter(graph)
-        return TopologicalSorter(graph).static_order()
+    async def instance(cls) -> Self:
+        """Create an instance of the class with all dependencies resolved."""
+        params = {}
+        for resolver in cls.__resolvers__:
+            name, value = await resolver.resolve()
+            params[name] = value
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        "Register the class as an injectable."
-        super().__init_subclass__(**kwargs)
-        for _, annotation in cls.__annotations__.items():
-            if origin := getattr(annotation, "__origin__", None):
-                if origin is ClassVar:
-                    continue
-                if origin is Inject:
-                    typ = annotation.__args__[0]
-                    Injectable.__dependencies__[cls].append(typ)
+        return cls(**params)
 
-    @classmethod
-    def register(cls, fn: Provider) -> None:
-        sig = inspect.signature(fn)
-        return_type = sig.return_annotation.__args__[0]
-        parameters: list[tuple[str, type]] = []
-        dependencies: list[type] = []
-        for name, param in sig.parameters.items():
-            origin = getattr(param.annotation, "__origin__", None)
-            if origin is Inject:
-                typ = param.annotation.__args__[0]
-                parameters.append((name, typ))
-                dependencies.append(typ)
 
-        # wrap the provider function in an async context manager
-        fn_acm = asynccontextmanager(fn)
+def factory(func: Constructor) -> Constructor:
+    """Decorator to register a factory function for a type."""
+    if "return" not in func.__annotations__:
+        raise ValueError("Factory function must have a return type annotation")
+    # Register the factory function
+    return_annotation = func.__annotations__["return"]
+    origin = get_origin(return_annotation)
+    return_type = return_annotation.__args__[0] if origin is AsyncIterator else return_annotation
+    __factories__[return_type] = func
+    return func
 
-        @asynccontextmanager
-        async def provider(ctx: ExecutionContext) -> AsyncIterator[Any]:
-            if return_type in ctx:
-                yield ctx[return_type]
-                return
-            args = {name: ctx[typ] for name, typ in parameters}
-            async with fn_acm(**args) as result:
-                ctx[return_type] = result
-                yield result
 
-        Injectable.__dependencies__[return_type].append(provider)
-        Injectable.__dependencies__[provider] = dependencies
+def build_resolvers(annotations: dict[str, Any]) -> list[Resolver]:
+    resolvers = []
+    for name, annotation in annotations.items():
+        origin = get_origin(annotation)
+        if not origin:
+            if issubclass(annotation, Injectable):
+                resolvers.append(InjectableResolver(name=name, typ=annotation))
+            elif annotation in __factories__:
+                resolvers.append(FactoryResolver(name=name, typ=annotation))
+            else:
+                raise ValueError(f"Invalid annotation for {name}: {annotation}")
+            continue
+        # skip if annotation is ClassVar
+        if origin is ClassVar:
+            continue
 
-    @classmethod
-    async def instance(cls, ctx: ExecutionContext) -> Self:
-        """
-        Instantiate an instance of the class if it's not already exists in the stack.
-        """
-        if cls in ctx:
-            return ctx[cls]
+        if len(annotation.__args__) != 1:
+            raise ValueError(f"Invalid annotation for {name}: {annotation}")
 
-        for dependency in cls._dependencies():
-            match dependency:
-                case type():
-                    if dependency not in ctx:
-                        ctx[dependency] = await dependency.instance(ctx)
-                case _ as provider:
-                    await ctx.enter_async_context(provider(ctx))
+        typ = annotation.__args__[0]
+        annotated = origin.__value__
+        if not annotated:
+            raise ValueError(f"Invalid annotation for {name}: {annotation}")
 
-        args = {}
-        for name, annotation in cls.__annotations__.items():
-            if origin := getattr(annotation, "__origin__", None):
-                if origin is Inject:
-                    typ = annotation.__args__[0]
-                    args[name] = ctx[typ]
-        # instantiate the class
-        return cls(**args)
+        if not hasattr(annotated, "__metadata__"):
+            raise ValueError(f"Invalid annotation for {name}: {annotation}")
+
+        metadata = annotated.__metadata__[0]
+        DependencyResolver = metadata.get("resolver", None)
+        if not DependencyResolver:
+            raise ValueError(f"No resolver found for {name}: {annotation}")
+
+        if not issubclass(DependencyResolver, Resolver):
+            raise ValueError(f"Invalid resolver for {name}: {annotation}")
+
+        resolvers.append(DependencyResolver(name=name, typ=typ))
+
+    return resolvers
+
+
+def inject(func: Callable) -> Callable:
+    """Decorator to mark a function as an injector."""
+    resolvers = build_resolvers(func.__annotations__)
+
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        params = {}
+        for resolver in resolvers:
+            name, value = await resolver.resolve()
+            params[name] = value
+        # Call the original function with resolved parameters
+        return await func(self, **params)
+
+    return wrapper
