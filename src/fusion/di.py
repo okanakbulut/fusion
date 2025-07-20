@@ -1,9 +1,7 @@
 from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager
 from functools import wraps
+from os import error
 from typing import Any, Callable, ClassVar, Self, TypeVar, get_origin
-
-from msgspec import Struct as Object
 
 from fusion.resolvers import (
     Constructor,
@@ -12,6 +10,7 @@ from fusion.resolvers import (
     Resolver,
     __factories__,
 )
+from fusion.responses import Object
 
 T = TypeVar("T")
 
@@ -49,6 +48,8 @@ def factory(func: Constructor) -> Constructor:
 def build_resolvers(annotations: dict[str, Any]) -> list[Resolver]:
     resolvers = []
     for name, annotation in annotations.items():
+        if name == "self" or name == "return":
+            continue
         origin = get_origin(annotation)
         if not origin:
             if issubclass(annotation, Injectable):
@@ -66,7 +67,7 @@ def build_resolvers(annotations: dict[str, Any]) -> list[Resolver]:
             raise ValueError(f"Invalid annotation for {name}: {annotation}")
 
         typ = annotation.__args__[0]
-        annotated = origin.__value__
+        annotated = getattr(origin, "__value__", None)
         if not annotated:
             raise ValueError(f"Invalid annotation for {name}: {annotation}")
 
