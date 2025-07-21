@@ -1,16 +1,16 @@
 from collections.abc import AsyncIterator
 from functools import wraps
-from os import error
 from typing import Any, Callable, ClassVar, Self, TypeVar, get_origin
 
-from fusion.resolvers import (
+from .protocols import Resolver
+from .request import request
+from .resolvers import (
     Constructor,
     FactoryResolver,
     InjectableResolver,
-    Resolver,
     __factories__,
 )
-from fusion.responses import Object
+from .responses import Object
 
 T = TypeVar("T")
 
@@ -25,9 +25,10 @@ class Injectable(Object):
     @classmethod
     async def instance(cls) -> Self:
         """Create an instance of the class with all dependencies resolved."""
+
         params = {}
         for resolver in cls.__resolvers__:
-            name, value = await resolver.resolve()
+            name, value = await resolver.resolve(request.get())
             params[name] = value
 
         return cls(**params)
@@ -95,7 +96,7 @@ def inject(func: Callable) -> Callable:
     async def wrapper(self, *args, **kwargs):
         params = {}
         for resolver in resolvers:
-            name, value = await resolver.resolve()
+            name, value = await resolver.resolve(request.get())
             params[name] = value
         # Call the original function with resolved parameters
         return await func(self, **params)

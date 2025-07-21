@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from fusion import Fusion, Handler, Injectable, Object, QueryParam, Response, Route
+from fusion import Fusion, Handler, Injectable, Object, QueryParam, Request, Response, Route
 
 
 @pytest.mark.asyncio
@@ -10,10 +10,12 @@ async def test_query_param_string():
         message: str
 
     class QueryParamHandler(Handler):
-        async def handle(self, message: QueryParam[str]) -> Response[Output]:
-            return Response(Output(message=message))
+        message: QueryParam[str]
 
-    app = Fusion(routes=[Route(path="/echo", handler=QueryParamHandler)])
+        async def handle(self, request: Request) -> Response[Output]:
+            return Response(Output(message=self.message))
+
+    app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 
     async with httpx.AsyncClient(
         base_url="http://localhost", transport=httpx.ASGITransport(app)
@@ -29,10 +31,12 @@ async def test_query_param_int():
         number: int
 
     class QueryParamHandler(Handler):
-        async def handle(self, number: QueryParam[int]) -> Response[Output]:
-            return Response(Output(number=number))
+        number: QueryParam[int]
 
-    app = Fusion(routes=[Route(path="/echo", handler=QueryParamHandler)])
+        async def handle(self, request: Request) -> Response[Output]:
+            return Response(Output(number=self.number))
+
+    app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 
     async with httpx.AsyncClient(
         base_url="http://localhost", transport=httpx.ASGITransport(app)
@@ -48,10 +52,12 @@ async def test_query_param_float():
         temperature: float
 
     class QueryParamHandler(Handler):
-        async def handle(self, temperature: QueryParam[float]) -> Response[Output]:
-            return Response(Output(temperature=temperature))
+        temperature: QueryParam[float]
 
-    app = Fusion(routes=[Route(path="/echo", handler=QueryParamHandler)])
+        async def handle(self, request: Request) -> Response[Output]:
+            return Response(Output(temperature=self.temperature))
+
+    app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 
     async with httpx.AsyncClient(
         base_url="http://localhost", transport=httpx.ASGITransport(app)
@@ -74,16 +80,18 @@ async def test_query_param_multiple():
         temperature: float
 
     class QueryParamHandler(Handler):
-        async def handle(self, input: Input) -> Response[Output]:
+        input: Input
+
+        async def handle(self, request: Request) -> Response[Output]:
             return Response(
                 Output(
-                    numbers=input.numbers,
-                    message=input.message,
-                    temperature=input.temperature,
+                    numbers=self.input.numbers,
+                    message=self.input.message,
+                    temperature=self.input.temperature,
                 )
             )
 
-    app = Fusion(routes=[Route(path="/echo", handler=QueryParamHandler)])
+    app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 
     async with httpx.AsyncClient(
         base_url="http://localhost", transport=httpx.ASGITransport(app)

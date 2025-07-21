@@ -1,19 +1,20 @@
 from contextlib import AsyncExitStack
 from contextvars import ContextVar, Token
 from functools import cached_property
-from typing import Any, Self, Union
+from typing import Any, Self
 from urllib.parse import parse_qsl
 
-from fusion.types import Receive, Scope, Send
+from .types import Receive, Scope, Send
 
 request: ContextVar["Request"] = ContextVar("request")
 
 
 class Request(AsyncExitStack):
-    _token: Token
     scope: Scope
     receive: Receive
     send: Send
+    _token: Token
+    _body: bytes | None = None
 
     def __init__(self, scope: Scope, receive: Receive, send: Send) -> None:
         super().__init__()
@@ -33,8 +34,27 @@ class Request(AsyncExitStack):
         finally:
             request.reset(self._token)
 
+    async def body(self) -> bytes:
+        """Get the body from the request."""
+        if self._body is not None:
+            return self._body
+
+        chunks = []
+        while True:
+            message = await self.receive()
+            if message["type"] == "http.request":
+                body = message.get("body", b"")
+                if body:
+                    chunks.append(body)
+                if not message.get("more_body", False):
+                    break
+            elif message["type"] == "http.disconnect":
+                raise RuntimeError("Client disconnected")
+        self._body = b"".join(chunks)
+        return self._body
+
     @cached_property
-    def query_params(self) -> dict[str, Union[Any, list[Any]]]:
+    def query_params(self) -> dict[str, Any | list[Any]]:
         """Get the query parameters from the request."""
         params = {}
         query_string = self.scope["query_string"].decode()
@@ -46,7 +66,7 @@ class Request(AsyncExitStack):
         return params
 
     @cached_property
-    def path_params(self) -> dict[str, Union[Any, list[Any]]]:
+    def path_params(self) -> dict[str, Any]:
         """Get the path parameters from the request."""
         return {}
 

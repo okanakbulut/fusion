@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fusion.resolvers import (
+from .resolvers import (
     CookieResolver,
     HeaderResolver,
     PathParamResolver,
@@ -12,4 +12,4 @@ type PathParam[T] = Annotated[T, {"resolver": PathParamResolver}]
 type QueryParam[T] = Annotated[T, {"resolver": QueryParamResolver}]
 type Header[T] = Annotated[T, {"resolver": HeaderResolver}]
 type Cookie[T] = Annotated[T, {"resolver": CookieResolver}]
-type RequestBody[O] = Annotated[O, {"resolver": RequestBodyResolver}]
+type RequestBody[T] = Annotated[T, {"resolver": RequestBodyResolver}]

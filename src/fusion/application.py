@@ -1,10 +1,10 @@
 import contextlib
 import typing
 
-from fusion.middleware import Middleware
-from fusion.request import Request
-from fusion.routing import Route, Router
-from fusion.types import Lifespan, Receive, Scope, Send
+from .middleware import Middleware
+from .request import Request
+from .routing import Route, Router
+from .types import Lifespan, Receive, Scope, Send
 
 
 @contextlib.asynccontextmanager
@@ -15,6 +15,8 @@ async def default_lifespan(app) -> typing.AsyncIterator[dict]:
 class Fusion:
     """Fusion is a lightweight ASGI framework for building web applications."""
 
+    __slots__ = ("router", "lifespan")
+
     def __init__(
         self,
         *,
@@ -22,7 +24,6 @@ class Fusion:
         lifespan: Lifespan = default_lifespan,
         middlewares: list[Middleware] | None = None,
     ) -> None:
-        # self.routes = routes
         self.router = Router(routes=routes)
         self.lifespan = lifespan
         if middlewares is not None:
@@ -37,8 +38,8 @@ class Fusion:
         if scope["type"] == "lifespan":
             return await self.handle_lifespan(scope, receive, send)
 
-        async with Request(scope, receive, send):
-            response = await self.router.handle()
+        async with Request(scope, receive, send) as request:
+            response = await self.router.handle(request)
             await response(scope, receive, send)
 
     async def handle_lifespan(self, scope: Scope, receive: Receive, send: Send) -> None:

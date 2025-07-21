@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from fusion import Fusion, Handler, Object, Response, Route
+from fusion import Fusion, Handler, Object, Request, Response, Route
 
 
 @pytest.mark.asyncio
@@ -10,7 +10,7 @@ async def test_simple_handler():
         message: str
 
     class SimpleHandler(Handler):
-        async def handle(self) -> Response[Output]:
+        async def handle(self, request: Request) -> Response[Output]:
             return Response(Output(message="Hello, World!"))
 
     app = Fusion(

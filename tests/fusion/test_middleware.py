@@ -6,10 +6,9 @@ from fusion import (
     Error,
     Fusion,
     Handler,
-    Header,
-    Injectable,
     Middleware,
     Object,
+    Request,
     Response,
     Route,
 )
@@ -18,23 +17,31 @@ from fusion.responses import Unauthorized
 
 @pytest.mark.asyncio
 async def test_middleware():
-    class AuthenticatedMiddleware(BaseMiddleware):
-        async def handle(self, authorization: Header[str]):
-            if not authorization.startswith("Bearer "):
+    class AuthenticationMiddleware(BaseMiddleware):
+        async def handle(self, request: Request) -> Response:
+            authorization = request.headers.get("authorization")
+            if not authorization or not authorization.startswith("Bearer "):
                 return Unauthorized(
                     Error(code="ERR-UNAUTHORIZED", message="Unknown authentication method")
                 )
-            return await self.app.handle()
+            return await self.app.handle(request)
 
     class Item(Object):
         id: int
 
     class GetItemHandler(Handler):
-        async def handle(self) -> Response[Item]:
+        async def handle(self, request: Request) -> Response[Item]:
             return Response(Item(id=1))
 
     app = Fusion(
-        routes=[Route("/items", GetItemHandler, middlewares=[Middleware(AuthenticatedMiddleware)])]
+        routes=[
+            Route(
+                "/items",
+                methods=["GET"],
+                handler=GetItemHandler,
+                middlewares=[Middleware(AuthenticationMiddleware)],
+            )
+        ]
     )
 
     async with httpx.AsyncClient(
@@ -42,7 +49,7 @@ async def test_middleware():
         transport=httpx.ASGITransport(app=app),
     ) as client:
         response = await client.get("/items")
-        assert response.status_code == 400
+        assert response.status_code == 401
 
         response = await client.get("/items", headers={"Authorization": "token"})
         assert response.status_code == 401

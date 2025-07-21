@@ -1,20 +1,14 @@
-import typing
 from abc import abstractmethod
 
-from fusion.di import Injectable, inject
-from fusion.types import R
+from .di import Injectable
+from .request import Request
+from .responses import Response
 
 
-class Handler(Injectable, typing.Generic[R]):
+class Handler(Injectable):
     """Base class for HTTP handlers."""
 
-    def __init_subclass__(cls, *args, **kwargs):
-        super().__init_subclass__(*args, **kwargs)
-        if not hasattr(cls, "handle"):
-            raise TypeError(f"{cls.__name__} must implement the handle method.")
-        cls.handle = inject(cls.handle)
-
     @abstractmethod
-    async def handle(self, *args, **kwargs) -> R:
+    async def handle(self, request: Request) -> Response:
         """Execute the handler."""
         raise NotImplementedError("Subclasses must implement the handle method.")

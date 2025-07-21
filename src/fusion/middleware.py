@@ -1,8 +1,7 @@
 import typing
 
-from fusion.di import inject
-from fusion.responses import Object, Response
-from fusion.types import HttpHandler
+from .protocols import HttpHandler, Request
+from .responses import Object, Response
 
 P = typing.ParamSpec("P")
 
@@ -22,10 +21,6 @@ class Middleware:
 class BaseMiddleware(Object):
     app: HttpHandler
 
-    def __init_subclass__(cls, *args, **kwargs):
-        cls.handle = inject(cls.handle)
-        return super().__init_subclass__(*args, **kwargs)
-
-    async def handle(self, *args, **kwargs) -> Response:
+    async def handle(self, request: Request) -> Response:
         """Handle ASGI requests."""
-        return await self.app.handle()
+        return await self.app.handle(request)

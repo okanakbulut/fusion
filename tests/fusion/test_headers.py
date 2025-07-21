@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from fusion import Fusion, Handler, Header, Injectable, Object, Response, Route
+from fusion import Fusion, Handler, Header, Injectable, Object, Request, Response, Route
 
 
 @pytest.mark.asyncio
@@ -11,12 +11,16 @@ async def test_headers():
         user_id: int
 
     class AuthorizationHandler(Handler):
-        async def handle(
-            self, authorization: Header[str], user_id: Header[int]
-        ) -> Response[Output]:
-            return Response(Output(authorization=authorization, user_id=user_id))
+        authorization: Header[str]
+        user_id: Header[int]
 
-    app = Fusion(routes=[Route(path="/auth", handler=AuthorizationHandler)])
+        async def handle(
+            self,
+            request: Request,
+        ) -> Response[Output]:
+            return Response(Output(authorization=self.authorization, user_id=self.user_id))
+
+    app = Fusion(routes=[Route(path="/auth", methods=["GET"], handler=AuthorizationHandler)])
 
     async with httpx.AsyncClient(
         base_url="http://localhost", transport=httpx.ASGITransport(app=app)
@@ -39,10 +43,14 @@ async def test_headers_with_missing_header():
         user_id: int
 
     class AuthorizationHandler(Handler):
-        async def handle(self, input: Input) -> Response[Output]:
-            return Response(Output(authorization=input.authorization, user_id=input.user_id))
+        input: Input
 
-    app = Fusion(routes=[Route(path="/auth", handler=AuthorizationHandler)])
+        async def handle(self, request: Request) -> Response[Output]:
+            return Response(
+                Output(authorization=self.input.authorization, user_id=self.input.user_id)
+            )
+
+    app = Fusion(routes=[Route(path="/auth", methods=["GET"], handler=AuthorizationHandler)])
 
     async with httpx.AsyncClient(
         base_url="http://localhost",
