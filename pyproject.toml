@@ -1,6 +1,6 @@
 [project]
 name = "fusion"
-version = "0.1.0"
+version = "0.3.1"
 description = "Fusion is a modern ASGI web framework for Python with built-in dependency injection, OpenAPI schema generation, and MCP support."
 readme = "README.md"
 requires-python = ">=3.12"
