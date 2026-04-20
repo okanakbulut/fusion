@@ -53,7 +53,13 @@ jobs:
           uv run pytest --cov=fusion --cov-report=xml -q
           python - <<'EOF'
           import xml.etree.ElementTree as ET
-          pct = round(float(ET.parse("coverage.xml").getroot().get("line-rate")) * 100, 1)
+          root = ET.parse("coverage.xml").getroot()
+          lines_valid = int(root.get("lines-valid", 0))
+          lines_covered = int(root.get("lines-covered", 0))
+          branches_valid = int(root.get("branches-valid", 0))
+          branches_covered = int(root.get("branches-covered", 0))
+          total = lines_valid + branches_valid
+          pct = round((lines_covered + branches_covered) / total * 100, 1) if total else 0.0
           color = "brightgreen" if pct >= 90 else "yellow" if pct >= 75 else "red"
           label, value = "coverage", f"{pct}%"
           lw, vw = 62, len(value) * 7 + 10
@@ -99,7 +105,9 @@ jobs:
 
       - name: Push tag and changelog
         if: ${{ inputs.dry_run != true }}
-        run: git push --follow-tags
+        run: |
+          git push
+          git push --tags
 
   build:
     name: Build distributions
