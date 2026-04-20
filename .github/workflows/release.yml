@@ -78,10 +78,16 @@ jobs:
         id: bump
         run: |
           DRY_RUN=${{ inputs.dry_run == true && '--dry-run' || '' }}
-          if [ "${{ inputs.bump }}" = "auto" ]; then
-            uv run cz bump --yes --changelog $DRY_RUN
+          PREV_TAG="v$(uv run cz version --project)"
+          if git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            CHANGELOG="--changelog"
           else
-            uv run cz bump --increment ${{ inputs.bump }} --yes --changelog $DRY_RUN
+            CHANGELOG=""
+          fi
+          if [ "${{ inputs.bump }}" = "auto" ]; then
+            uv run cz bump --yes $CHANGELOG $DRY_RUN
+          else
+            uv run cz bump --increment ${{ inputs.bump }} --yes $CHANGELOG $DRY_RUN
           fi
           echo "version=$(uv run cz version --project)" >> "$GITHUB_OUTPUT"
 
