@@ -9,6 +9,11 @@ on:
         default: "auto"
         type: choice
         options: [auto, patch, minor, major]
+      dry_run:
+        description: "Dry run — simulate bump without committing or pushing"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   bump:
@@ -46,19 +51,22 @@ jobs:
       - name: Bump version
         id: bump
         run: |
+          DRY_RUN=${{ inputs.dry_run == true && '--dry-run' || '' }}
           if [ "${{ inputs.bump }}" = "auto" ]; then
-            uv run cz bump --yes --changelog
+            uv run cz bump --yes --changelog $DRY_RUN
           else
-            uv run cz bump --increment ${{ inputs.bump }} --yes --changelog
+            uv run cz bump --increment ${{ inputs.bump }} --yes --changelog $DRY_RUN
           fi
           echo "version=$(uv run cz version --project)" >> "$GITHUB_OUTPUT"
 
       - name: Push tag and changelog
+        if: ${{ inputs.dry_run != true }}
         run: git push --follow-tags
 
   build:
     name: Build distributions
     needs: bump
+    if: ${{ inputs.dry_run != true }}
     runs-on: ubuntu-latest
 
     steps:
