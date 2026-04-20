@@ -59,3 +59,33 @@ async def test_middleware():
         response = await client.get("/items", headers={"Authorization": "Bearer token"})
         assert response.status_code == 200
         assert response.json() == {"id": 1}
+
+
+@pytest.mark.asyncio
+async def test_base_middleware_passthrough():
+    from fusion.middleware import BaseMiddleware
+
+    class Item(Object):
+        id: int
+
+    class GetItemsHandler(Handler):
+        async def handle(self, request: Request) -> Response[Item]:
+            return Response(Item(id=99))
+
+    app = Fusion(
+        routes=[
+            Get(
+                "/items",
+                handler=GetItemsHandler,
+                middlewares=[Middleware(BaseMiddleware)],
+            )
+        ]
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://localhost",
+        transport=httpx.ASGITransport(app=app),
+    ) as client:
+        response = await client.get("/items")
+        assert response.status_code == 200
+        assert response.json() == {"id": 99}

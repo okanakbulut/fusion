@@ -6,11 +6,13 @@ from urllib.parse import parse_qsl
 from ._utils import cached_property
 from .types import Receive, Scope, Send
 
-context: contextvars.ContextVar["Context"] = contextvars.ContextVar("context")
+context: contextvars.ContextVar[Context] = contextvars.ContextVar("context")
+
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 class Context(contextlib.AsyncExitStack):
-    _token: contextvars.Token["Context"]
+    _token: contextvars.Token[Context]
     _body: bytes | None
     scope: Scope
     receive: Receive
@@ -68,13 +70,19 @@ class Context(contextlib.AsyncExitStack):
         if self._body is not None:
             return self._body
 
-        chunks = []
+        chunks: list[bytes] = []
+        total = 0
         while True:
             message = await self.receive()
             if message["type"] == "http.request":
-                body = message.get("body", b"")
-                if body:
-                    chunks.append(body)
+                chunk = message.get("body", b"")
+                if chunk:
+                    total += len(chunk)
+                    if total > MAX_BODY_SIZE:
+                        raise ValueError(
+                            f"Request body exceeds maximum size of {MAX_BODY_SIZE} bytes"
+                        )
+                    chunks.append(chunk)
                 if not message.get("more_body", False):
                     break
             elif message["type"] == "http.disconnect":
@@ -101,8 +109,13 @@ class Context(contextlib.AsyncExitStack):
 
     @cached_property
     def cookies(self) -> dict[str, str]:
-        """Get the cookies from the request."""
-        return {
-            key.lower().replace("-", "_").replace(" ", "_"): value
-            for key, value in self.scope["cookies"].items()
-        }
+        """Get the cookies from the request, parsed from the Cookie header."""
+        cookie_header = self.headers.get("cookie", "")
+        cookies: dict[str, str] = {}
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if "=" in part:
+                key, _, value = part.partition("=")
+                normalized = key.strip().lower().replace("-", "_").replace(" ", "_")
+                cookies[normalized] = value.strip()
+        return cookies

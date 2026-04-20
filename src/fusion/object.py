@@ -16,35 +16,35 @@ T = typing.TypeVar("T")
 
 
 class Field(msgspec.Struct, frozen=True):
-    name: typing.Optional[str] = None
-    description: typing.Optional[str] = None
-    deprecated: typing.Optional[bool] = False
-    default: typing.Optional[typing.Any] = NODEFAULT
-    default_factory: typing.Optional[typing.Callable[[], typing.Any]] = None
+    name: str | None = None
+    description: str | None = None
+    deprecated: bool | None = False
+    default: typing.Any | None = NODEFAULT
+    default_factory: typing.Callable[[], typing.Any] | None = None
     # validation parameters for json decoding
-    ge: typing.Optional[typing.Union[int, float]] = None  # greater than or equal
-    gt: typing.Optional[typing.Union[int, float]] = None  # greater than
-    le: typing.Optional[typing.Union[int, float]] = None  # less than or equal
-    lt: typing.Optional[typing.Union[int, float]] = None  # less than
-    min_length: typing.Optional[int] = None
-    max_length: typing.Optional[int] = None
-    pattern: typing.Optional[str] = None
+    ge: int | float | None = None  # greater than or equal
+    gt: int | float | None = None  # greater than
+    le: int | float | None = None  # less than or equal
+    lt: int | float | None = None  # less than
+    min_length: int | None = None
+    max_length: int | None = None
+    pattern: str | None = None
 
 
 def field(
     *,
-    name: typing.Optional[str] = None,
-    description: typing.Optional[str] = None,
-    deprecated: typing.Optional[bool] = None,
-    default: typing.Optional[typing.Any] = NODEFAULT,
-    default_factory: typing.Optional[typing.Callable[[], T]] = None,
-    ge: typing.Optional[typing.Union[int, float]] = None,
-    gt: typing.Optional[typing.Union[int, float]] = None,
-    le: typing.Optional[typing.Union[int, float]] = None,
-    lt: typing.Optional[typing.Union[int, float]] = None,
-    min_length: typing.Optional[int] = None,
-    max_length: typing.Optional[int] = None,
-    pattern: typing.Optional[str] = None,
+    name: str | None = None,
+    description: str | None = None,
+    deprecated: bool | None = None,
+    default: typing.Any | None = NODEFAULT,
+    default_factory: typing.Callable[[], T] | None = None,
+    ge: int | float | None = None,
+    gt: int | float | None = None,
+    le: int | float | None = None,
+    lt: int | float | None = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    pattern: str | None = None,
 ) -> typing.Any:
     return Field(
         name=name,
@@ -63,7 +63,7 @@ def field(
 
 
 @typing.dataclass_transform(field_specifiers=(field,))
-class MetaObject(msgspec.StructMeta):
+class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
     def __new__(
         cls,
         name: str,

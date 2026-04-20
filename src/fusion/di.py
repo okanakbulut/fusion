@@ -13,7 +13,7 @@ def _get_factory_type(return_annotation: typing.Any) -> type[typing.Any]:
     origin = typing.get_origin(return_annotation)
     if origin in {AsyncIterator, AbstractAsyncContextManager}:
         args = typing.get_args(return_annotation)
-        if not args:
+        if not args:  # pragma: no cover
             raise ValueError("Factory return type must specify the produced value type")
         return typing.cast(type[typing.Any], args[0])
     return typing.cast(type[typing.Any], return_annotation)

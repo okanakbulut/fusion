@@ -6,10 +6,7 @@ import msgspec
 class Object(msgspec.Struct, gc=False): ...
 
 
-T = typing.TypeVar("T", bound=Object)
-
-
-class Response(Object, typing.Generic[T]):
+class Response[T: Object](Object):
     encoder: typing.ClassVar[msgspec.json.Encoder] = msgspec.json.Encoder()
     status_code: typing.ClassVar[int] = 200
     content: T | str | None = None
@@ -27,11 +24,13 @@ class Response(Object, typing.Generic[T]):
             for k, v in self.headers.items():
                 raw_headers.append((k.encode("latin-1"), v.encode("latin-1")))
 
-        await send({
-            "type": "http.response.start",
-            "status": self.status_code,
-            "headers": raw_headers,
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": self.status_code,
+                "headers": raw_headers,
+            }
+        )
 
         await send({"type": "http.response.body", "body": body})
 
@@ -45,14 +44,17 @@ class NoContent(Response):
 
 
 class Problem(Object, omit_defaults=True):
-    """Base RFC-9457 ASGI error response. Subclass and set type/status as ClassVars, title as field default."""
+    """Base RFC-9457 ASGI error response.
+
+    Subclass and set type/status as ClassVars, title as field default.
+    """
 
     encoder: typing.ClassVar[msgspec.json.Encoder] = msgspec.json.Encoder()
     type: typing.ClassVar[str] = "about:blank"
     status: typing.ClassVar[int] = 500
     title: str
-    detail: typing.Optional[str] = None
-    instance: typing.Optional[str] = None
+    detail: str | None = None
+    instance: str | None = None
 
     @property
     def body(self) -> dict:

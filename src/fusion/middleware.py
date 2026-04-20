@@ -12,13 +12,10 @@ class BaseMiddleware(Object):
         return await self.app.handle(request)
 
 
-P = typing.ParamSpec("P")
-
-
 class Middleware:
-    __slots__ = ("cls", "args", "kwargs")
+    __slots__ = ("args", "cls", "kwargs")
 
-    def __init__(self, cls: type[HttpMiddleware], *args: P.args, **kwargs: P.kwargs) -> None:
+    def __init__(self, cls: type[HttpMiddleware], *args: typing.Any, **kwargs: typing.Any) -> None:
         self.cls = cls
         self.args = args
         self.kwargs = kwargs

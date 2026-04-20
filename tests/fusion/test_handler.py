@@ -11,15 +11,19 @@ from fusion.types import Receive, Scope, Send
 
 class MyResponse(Object):
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [(b"content-type", b"text/plain")],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": b"Hello, World!",
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"Hello, World!",
+            }
+        )
 
 
 def test_handler_protocol_compliance():

@@ -4,8 +4,9 @@ import typing
 import msgspec
 
 from .context import Context
-from .protocols import HttpRequest, HttpRoute
+from .protocols import HttpRequest
 from .responses import BadRequest, InternalServerError, MethodNotAllowed, NotFound
+from .route import Route
 from .types import Method, Receive, Scope, Send
 
 # regex to match path segments like "{path_param[:(int|uuid|/regex_pattern/)]}"
@@ -17,6 +18,8 @@ type_patterns = {
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
     ),
 }
+
+MAX_PATH_DEPTH = 50
 
 
 class PathSegment(msgspec.Struct, frozen=True):
@@ -31,11 +34,14 @@ class PathSegment(msgspec.Struct, frozen=True):
         pattern = None
         if match := segment_type_pattern.match(segment):
             name = match.group(1)
-            pattern = type_patterns.get(match.group(2), re.compile(f"^{match.group(2)}$"))
+            if match.group(2) is None:
+                pattern = re.compile(r"^.+$")
+            else:
+                pattern = type_patterns.get(match.group(2), re.compile(f"^{match.group(2)}$"))
 
         return cls(name=name, pattern=pattern)
 
-    def match(self, segment: str) -> typing.Tuple[bool, str, typing.Any]:
+    def match(self, segment: str) -> tuple[bool, str, typing.Any]:
         if self.pattern:
             if not self.pattern.match(segment):
                 return False, "", None
@@ -56,17 +62,17 @@ class RouteNode(msgspec.Struct):
     
     """
 
-    routes: dict[Method, HttpRoute] = msgspec.field(default_factory=lambda: dict())
+    routes: dict[Method, Route] = msgspec.field(default_factory=lambda: dict())
     children: dict[PathSegment, typing.Self] = msgspec.field(default_factory=lambda: dict())
 
 
 class TreeRouter:
-    def __init__(self, routes: list[HttpRoute]) -> None:
+    def __init__(self, routes: list[Route]) -> None:
         self.root = RouteNode()
         for route in routes:
             self._insert_route(route)
 
-    def _insert_route(self, route: HttpRoute[typing.Any, typing.Any]) -> None:
+    def _insert_route(self, route: Route[typing.Any, typing.Any]) -> None:
         current_node = self.root
 
         for segment in route.path.strip("/").split("/"):
@@ -83,6 +89,10 @@ class TreeRouter:
         async with Context(scope, receive, send) as ctx:
             path_params: dict[str, typing.Any] = {}  # To store extracted path parameters
             path_segments = ctx.path.strip("/").split("/")
+
+            if len(path_segments) > MAX_PATH_DEPTH:
+                return await NotFound(detail="Route not found")(scope, receive, send)
+
             current_node = self.root
 
             for segment in path_segments:
@@ -102,7 +112,7 @@ class TreeRouter:
                 current_node = matched_child
 
             # If we reached here, we found a matching route
-            if route := current_node.routes.get(ctx.method):
+            if route := current_node.routes.get(Method(ctx.method)):
                 scope["path_params"] = path_params
                 try:
                     request_class = route.get_request_class()

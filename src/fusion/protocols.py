@@ -10,20 +10,20 @@ class Injectable(TypedProtocol):
     #     return cls.instance(*args, **kwargs)
 
     @classmethod
-    async def instance(cls) -> typing.Self: ...
+    async def instance(cls) -> typing.Self: ...  # pragma: no cover
 
 
 class RenderResult(TypedProtocol):
-    body: typing.Optional[bytes]
-    headers: typing.Optional[list[tuple[bytes, bytes]]]
-    cookies: typing.Optional[list[tuple[bytes, bytes]]]
+    body: bytes | None
+    headers: list[tuple[bytes, bytes]] | None
+    cookies: list[tuple[bytes, bytes]] | None
 
 
 class Renderer(TypedProtocol):
     attr_name: str
     attr_type: type
 
-    def render(self, obj: typing.Any) -> RenderResult: ...
+    def render(self, obj: typing.Any) -> RenderResult: ...  # pragma: no cover
 
 
 class HttpConnection(TypedProtocol):
@@ -33,7 +33,9 @@ class HttpConnection(TypedProtocol):
 
 
 class HttpResponse(TypedProtocol):
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None: ...
+    async def __call__(  # pragma: no cover
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None: ...
 
 
 class HttpRequest(Injectable):
@@ -46,13 +48,13 @@ class AnnotationResolver[T](TypedProtocol):
     """Resolver protocol for dependency resolution."""
 
     name: str
-    typ: typing.Type[T]
+    typ: type[T]
 
-    async def resolve(self) -> tuple[str, T | None]: ...
+    async def resolve(self) -> tuple[str, T | None]: ...  # pragma: no cover
 
 
 class HttpHandler[TRequest: HttpRequest, TResponse: HttpResponse](TypedProtocol):
-    async def handle(self, request: TRequest) -> TResponse: ...
+    async def handle(self, request: TRequest) -> TResponse: ...  # pragma: no cover
 
 
 class HttpMiddleware[TRequest: HttpRequest, TResponse: HttpResponse](
@@ -61,9 +63,16 @@ class HttpMiddleware[TRequest: HttpRequest, TResponse: HttpResponse](
     app: HttpHandler[TRequest, TResponse]
 
 
+class InjectableHandler[TRequest: HttpRequest, TResponse: HttpResponse](
+    Injectable, HttpHandler[TRequest, TResponse]
+): ...
+
+
 class HttpRoute[TRequest: HttpRequest, TResponse: HttpResponse](HttpHandler[TRequest, TResponse]):
     path: str
     method: Method
     handler: HttpHandler[TRequest, TResponse]
 
-    def match(self, path: str, method: str) -> Match: ...
+    def get_request_class(self) -> type[TRequest]: ...  # pragma: no cover
+
+    def match(self, path: str, method: str) -> Match: ...  # pragma: no cover
