@@ -2,43 +2,40 @@ import httpx
 import pytest
 
 from fusion import (
-    BaseMiddleware,
-    Error,
     Fusion,
+    Get,
     Handler,
     Middleware,
     Object,
     Request,
     Response,
     Route,
+    Unauthorized,
 )
-from fusion.responses import Unauthorized
+from fusion.middleware import BaseMiddleware
 
 
 @pytest.mark.asyncio
 async def test_middleware():
     class AuthenticationMiddleware(BaseMiddleware):
-        async def handle(self, request: Request) -> Response:
+        async def handle(self, request: Request) -> Unauthorized | Response:
             authorization = request.headers.get("authorization")
             if not authorization or not authorization.startswith("Bearer "):
-                return Unauthorized(
-                    Error(code="ERR-UNAUTHORIZED", message="Unknown authentication method")
-                )
+                return Unauthorized(detail="Unknown authentication method")
             return await self.app.handle(request)
 
     class Item(Object):
         id: int
 
-    class GetItemHandler(Handler):
+    class GetItemsHandler(Handler):
         async def handle(self, request: Request) -> Response[Item]:
             return Response(Item(id=1))
 
     app = Fusion(
         routes=[
-            Route(
+            Get(
                 "/items",
-                methods=["GET"],
-                handler=GetItemHandler,
+                handler=GetItemsHandler,
                 middlewares=[Middleware(AuthenticationMiddleware)],
             )
         ]
@@ -53,10 +50,11 @@ async def test_middleware():
 
         response = await client.get("/items", headers={"Authorization": "token"})
         assert response.status_code == 401
-        assert response.json() == {
-            "code": "ERR-UNAUTHORIZED",
-            "message": "Unknown authentication method",
-        }
+        assert response.headers["content-type"] == "application/problem+json"
+        assert response.json()["type"] == "about:blank"
+        assert response.json()["title"] == "Unauthorized"
+        assert response.json()["status"] == 401
+        assert response.json()["detail"] == "Unknown authentication method"
 
         response = await client.get("/items", headers={"Authorization": "Bearer token"})
         assert response.status_code == 200

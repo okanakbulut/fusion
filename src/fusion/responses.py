@@ -6,24 +6,6 @@ import msgspec
 class Object(msgspec.Struct, gc=False): ...
 
 
-class Error(Object, omit_defaults=True):
-    """
-    Represents an error response's body.
-    {
-        "code": "error_code",
-        "message": "Error message",
-        "details": [
-            {"field": "value"},
-            {"field2": "value2"}
-        ]
-    }
-    """
-
-    code: str
-    message: str
-    details: list[dict[str, str]] | None = None
-
-
 T = typing.TypeVar("T", bound=Object)
 
 
@@ -62,25 +44,76 @@ class NoContent(Response):
     status_code: typing.ClassVar[int] = 204
 
 
-class BadRequest(Response):
-    status_code: typing.ClassVar[int] = 400
+class Problem(Object, omit_defaults=True):
+    """Base RFC-9457 ASGI error response. Subclass and set type/status as ClassVars, title as field default."""
+
+    encoder: typing.ClassVar[msgspec.json.Encoder] = msgspec.json.Encoder()
+    type: typing.ClassVar[str] = "about:blank"
+    status: typing.ClassVar[int] = 500
+    title: str
+    detail: typing.Optional[str] = None
+    instance: typing.Optional[str] = None
+
+    @property
+    def body(self) -> dict:
+        return dict(
+            type=self.type,
+            status=self.status,
+            title=self.title,
+            detail=self.detail,
+            instance=self.instance,
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        body = self.encoder.encode(self.body)
+        headers = [
+            (b"content-type", b"application/problem+json"),
+            (b"content-length", str(len(body)).encode("latin-1")),
+        ]
+        await send({"type": "http.response.start", "status": self.status, "headers": headers})
+        await send({"type": "http.response.body", "body": body})
 
 
-class Unauthorized(Response):
-    status_code: typing.ClassVar[int] = 401
+class NotFound(Problem):
+    status: typing.ClassVar[int] = 404
+    title: str = "Not Found"
 
 
-class Forbidden(Response):
-    status_code: typing.ClassVar[int] = 403
+class BadRequest(Problem):
+    status: typing.ClassVar[int] = 400
+    title: str = "Bad Request"
 
 
-class NotFound(Response):
-    status_code: typing.ClassVar[int] = 404
+class Unauthorized(Problem):
+    status: typing.ClassVar[int] = 401
+    title: str = "Unauthorized"
 
 
-class MethodNotAllowed(Response):
-    status_code: typing.ClassVar[int] = 405
+class Forbidden(Problem):
+    status: typing.ClassVar[int] = 403
+    title: str = "Forbidden"
 
 
-class InternalServerError(Response):
-    status_code: typing.ClassVar[int] = 500
+class MethodNotAllowed(Problem):
+    status: typing.ClassVar[int] = 405
+    title: str = "Method Not Allowed"
+
+
+class InternalServerError(Problem):
+    status: typing.ClassVar[int] = 500
+    title: str = "Internal Server Error"
+
+
+class FieldError(Object):
+    field: str
+    message: str
+
+
+class ValidationError(BadRequest):
+    errors: list[FieldError] | None = None
+
+    @property
+    def body(self) -> dict:
+        problem = super().body
+        problem.update(errors=self.errors)
+        return problem

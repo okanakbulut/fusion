@@ -5,7 +5,7 @@ import pytest
 
 from fusion import Fusion, Handler, Object, Request, Response, Route
 from fusion.protocols import HttpHandler
-from fusion.responses import BadRequest, Error
+from fusion.responses import BadRequest, FieldError, NotFound, ValidationError
 from fusion.types import Receive, Scope, Send
 
 
@@ -79,7 +79,7 @@ async def test_simple_handler():
 async def test_handler_can_return_explicit_error_response():
     class ErrorHandler(Handler):
         async def handle(self, request: Request) -> BadRequest:
-            return BadRequest(content=Error(code="ERR-BAD-REQUEST", message="Handled by handler"))
+            return BadRequest(detail="Handled by handler")
 
     app = Fusion(
         routes=[
@@ -94,9 +94,13 @@ async def test_handler_can_return_explicit_error_response():
         response = await client.get("/handled-error")
 
     assert response.status_code == 400
+    assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
-        "code": "ERR-BAD-REQUEST",
-        "message": "Handled by handler",
+        "type": "about:blank",
+        "title": "Bad Request",
+        "status": 400,
+        "detail": "Handled by handler",
+        "instance": None,
     }
 
 
@@ -119,7 +123,121 @@ async def test_unhandled_exception_returns_internal_server_error():
         response = await client.get("/error")
 
     assert response.status_code == 500
+    assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
-        "code": "ERR-INTERNAL-SERVER-ERROR",
-        "message": "Internal server error",
+        "type": "about:blank",
+        "title": "Internal Server Error",
+        "status": 500,
+        "detail": None,
+        "instance": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_not_found_route_returns_problem_json():
+    app = Fusion(routes=[])
+
+    async with httpx.AsyncClient(
+        base_url="http://testserver",
+        transport=httpx.ASGITransport(app=app),
+    ) as client:
+        response = await client.get("/nonexistent")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "about:blank"
+    assert response.json()["title"] == "Not Found"
+    assert response.json()["status"] == 404
+
+
+@pytest.mark.asyncio
+async def test_method_not_allowed_returns_problem_json():
+    class Output(Object):
+        message: str
+
+    class GetHandler(Handler):
+        async def handle(self, request: Request) -> Response[Output]:
+            return Response(Output(message="ok"))
+
+    app = Fusion(
+        routes=[Route("/resource", methods=["GET"], handler=GetHandler)],
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://testserver",
+        transport=httpx.ASGITransport(app=app),
+    ) as client:
+        response = await client.post("/resource")
+
+    assert response.status_code == 405
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "about:blank"
+    assert response.json()["title"] == "Method Not Allowed"
+    assert response.json()["status"] == 405
+
+
+@pytest.mark.asyncio
+async def test_validation_error_with_field_errors():
+    class CreateHandler(Handler):
+        async def handle(self, request: Request) -> ValidationError | Response[Object]:
+            return ValidationError(
+                detail="Validation failed",
+                errors=[
+                    FieldError(field="email", message="invalid format"),
+                    FieldError(field="name", message="required"),
+                ],
+            )
+
+    app = Fusion(
+        routes=[Route("/create", methods=["POST"], handler=CreateHandler)],
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://testserver",
+        transport=httpx.ASGITransport(app=app),
+    ) as client:
+        response = await client.post("/create")
+
+    assert response.status_code == 400
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["type"] == "about:blank"
+    assert body["title"] == "Bad Request"
+    assert body["status"] == 400
+    assert body["detail"] == "Validation failed"
+    assert body["errors"] == [
+        {"field": "email", "message": "invalid format"},
+        {"field": "name", "message": "required"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_custom_problem_subclass():
+    from fusion.responses import Problem
+
+    class OutOfStockProblem(Problem):
+        type: typing.ClassVar[str] = "https://example.com/problems/out-of-stock"
+        status: typing.ClassVar[int] = 409
+        title: str = "Out of Stock"
+
+    class StockHandler(Handler):
+        async def handle(self, request: Request) -> OutOfStockProblem | Response[Object]:
+            return OutOfStockProblem(detail="Item #42 is out of stock")
+
+    app = Fusion(
+        routes=[Route("/stock", methods=["GET"], handler=StockHandler)],
+    )
+
+    async with httpx.AsyncClient(
+        base_url="http://testserver",
+        transport=httpx.ASGITransport(app=app),
+    ) as client:
+        response = await client.get("/stock")
+
+    assert response.status_code == 409
+    assert response.headers["content-type"] == "application/problem+json"
+    body = response.json()
+    assert body["type"] == "https://example.com/problems/out-of-stock"
+    assert body["title"] == "Out of Stock"
+    assert body["status"] == 409
+    assert body["detail"] == "Item #42 is out of stock"

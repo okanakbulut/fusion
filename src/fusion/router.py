@@ -5,7 +5,7 @@ import msgspec
 
 from .context import Context
 from .protocols import HttpRequest, HttpRoute
-from .responses import BadRequest, Error, InternalServerError, MethodNotAllowed, NotFound
+from .responses import BadRequest, InternalServerError, MethodNotAllowed, NotFound
 from .types import Method, Receive, Scope, Send
 
 # regex to match path segments like "{path_param[:(int|uuid|/regex_pattern/)]}"
@@ -97,9 +97,7 @@ class TreeRouter:
                         break
 
                 if matched_child is None:
-                    # If no route matched, return a 404 response
-                    not_found = NotFound(content=Error(code=404, message="Route not found"))
-                    return await not_found(scope, receive, send)
+                    return await NotFound(detail="Route not found")(scope, receive, send)
 
                 current_node = matched_child
 
@@ -107,33 +105,14 @@ class TreeRouter:
             if route := current_node.routes.get(ctx.method):
                 scope["path_params"] = path_params
                 try:
-                    # Request resolution errors are client-facing bad requests.
                     request_class = route.get_request_class()
                     request = await request_class.instance()
-                    # except Exception as exc:
-                    #     bad_request = BadRequest(
-                    #         content=Error(code="ERR-BAD-REQUEST", message=str(exc))
-                    #     )
-                    #     return await bad_request(scope, receive, send)
-
-                    # try:
-                    # Handlers are expected to return explicit error responses.
-                    # Unhandled handler exceptions fall back to a 500 response.
                     response = await route.handle(request)
                 except (ValueError, msgspec.ValidationError) as exc:
-                    response = BadRequest(content=Error(code="ERR-BAD-REQUEST", message=str(exc)))
+                    response = BadRequest(detail=str(exc))
                 except Exception:
-                    response = InternalServerError(
-                        content=Error(
-                            code="ERR-INTERNAL-SERVER-ERROR",
-                            message="Internal server error",
-                        )
-                    )
                     # TODO: log the exception here
+                    response = InternalServerError()
                 return await response(scope, receive, send)
 
-            # if there is no route for the method, return 405
-            method_not_allowed = MethodNotAllowed(
-                content=Error(code=405, message="Method not allowed")
-            )
-            return await method_not_allowed(scope, receive, send)
+            return await MethodNotAllowed()(scope, receive, send)
