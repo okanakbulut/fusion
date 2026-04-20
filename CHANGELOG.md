@@ -1,3 +1,10 @@
+## v0.6.1 (2026-04-20)
+
+### Fix
+
+- include branch coverage in badge and use explicit tag push
+- use absolute raw GitHub URL for coverage badge in README
+
 ## v0.6.0 (2026-04-20)
 
 ### Feat
