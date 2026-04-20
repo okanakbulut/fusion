@@ -14,7 +14,7 @@ async def default_lifespan(app: typing.Any) -> typing.AsyncIterator[dict[str, ty
 class Fusion:
     """Fusion is a lightweight ASGI framework for building web applications."""
 
-    __slots__ = ("router", "lifespan")
+    __slots__ = ("lifespan", "router")
 
     def __init__(
         self,
@@ -44,11 +44,24 @@ class Fusion:
         message = await receive()
         if message["type"] == "lifespan.startup":
             app = scope.get("app")
-            async with self.lifespan(app) as state:
-                scope["state"].update(state)
-                await send({"type": "lifespan.startup.complete"})
-                while True:
-                    message = await receive()
-                    if message["type"] == "lifespan.shutdown":
-                        break
-            await send({"type": "lifespan.shutdown.complete"})
+            startup_complete = False
+            try:
+                async with self.lifespan(app) as state:
+                    if state is not None:
+                        if not isinstance(state, dict):
+                            raise TypeError(
+                                f"Lifespan must yield a dict, got {type(state).__name__}"
+                            )
+                        scope.setdefault("state", {})
+                        scope["state"].update(state)
+                    startup_complete = True
+                    await send({"type": "lifespan.startup.complete"})
+                    while True:
+                        message = await receive()
+                        if message["type"] == "lifespan.shutdown":
+                            break
+                await send({"type": "lifespan.shutdown.complete"})
+            except Exception as exc:
+                if not startup_complete:
+                    await send({"type": "lifespan.startup.failed", "message": str(exc)})
+                raise

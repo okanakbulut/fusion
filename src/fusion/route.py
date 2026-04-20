@@ -23,7 +23,7 @@ class InjectableHandlerWrapper(HandlerWrapper):
 
 
 class Route[TRequest: HttpRequest, TResponse: HttpResponse]:
-    __slots__ = ("path", "method", "handler", "_request_class")
+    __slots__ = ("_request_class", "handler", "method", "path")
 
     path: str
     method: Method

@@ -18,6 +18,8 @@ type_patterns = {
     ),
 }
 
+MAX_PATH_DEPTH = 50
+
 
 class PathSegment(msgspec.Struct, frozen=True):
     """Represents a segment of a route path, which can be static or a parameterized segment."""
@@ -31,11 +33,14 @@ class PathSegment(msgspec.Struct, frozen=True):
         pattern = None
         if match := segment_type_pattern.match(segment):
             name = match.group(1)
-            pattern = type_patterns.get(match.group(2), re.compile(f"^{match.group(2)}$"))
+            if match.group(2) is None:
+                pattern = re.compile(r"^.+$")
+            else:
+                pattern = type_patterns.get(match.group(2), re.compile(f"^{match.group(2)}$"))
 
         return cls(name=name, pattern=pattern)
 
-    def match(self, segment: str) -> typing.Tuple[bool, str, typing.Any]:
+    def match(self, segment: str) -> tuple[bool, str, typing.Any]:
         if self.pattern:
             if not self.pattern.match(segment):
                 return False, "", None
@@ -83,6 +88,10 @@ class TreeRouter:
         async with Context(scope, receive, send) as ctx:
             path_params: dict[str, typing.Any] = {}  # To store extracted path parameters
             path_segments = ctx.path.strip("/").split("/")
+
+            if len(path_segments) > MAX_PATH_DEPTH:
+                return await NotFound(detail="Route not found")(scope, receive, send)
+
             current_node = self.root
 
             for segment in path_segments:

@@ -16,7 +16,7 @@ P = typing.ParamSpec("P")
 
 
 class Middleware:
-    __slots__ = ("cls", "args", "kwargs")
+    __slots__ = ("args", "cls", "kwargs")
 
     def __init__(self, cls: type[HttpMiddleware], *args: P.args, **kwargs: P.kwargs) -> None:
         self.cls = cls

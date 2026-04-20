@@ -21,7 +21,7 @@ class Handler[TRequest: HttpRequest, TResponse: HttpResponse](Injectable):
         from .resolvers import FactoryResolver, InjectableResolver
 
         for attr_name, resolver in cls.__resolvers__.items():
-            if not isinstance(resolver, (InjectableResolver, FactoryResolver)):
+            if not isinstance(resolver, InjectableResolver | FactoryResolver):
                 raise TypeError(
                     f"Attribute '{attr_name}' on Handler subclass '{cls.__name__}' uses a "
                     f"request-scoped annotation which is not allowed directly on a Handler. "
@@ -35,4 +35,8 @@ class Handler[TRequest: HttpRequest, TResponse: HttpResponse](Injectable):
 
     def get_request_class(self) -> type[TRequest]:
         """Get the request class inspected from the handle method."""
-        return typing.get_type_hints(self.handle)["request"]
+        hints = typing.get_type_hints(self.handle)
+        if "request" not in hints:
+            name = type(self).__name__
+            raise TypeError(f"{name}.handle() must declare a 'request' parameter with a type hint")
+        return hints["request"]

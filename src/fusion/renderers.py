@@ -6,9 +6,9 @@ from .object import Object
 
 
 class RenderResult(Object, kw_only=True):
-    body: typing.Optional[bytes] = None
-    headers: typing.Optional[list[tuple[bytes, bytes]]] = None
-    cookies: typing.Optional[list[tuple[bytes, bytes]]] = None
+    body: bytes | None = None
+    headers: list[tuple[bytes, bytes]] | None = None
+    cookies: list[tuple[bytes, bytes]] | None = None
 
 
 class Renderer(Object):
