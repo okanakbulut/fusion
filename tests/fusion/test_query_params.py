@@ -9,11 +9,14 @@ async def test_query_param_string():
     class Output(Object):
         message: str
 
-    class QueryParamHandler(Handler):
+    class QueryInput(Injectable):
         message: QueryParam[str]
 
+    class QueryParamHandler(Handler):
+        input: QueryInput
+
         async def handle(self, request: Request) -> Response[Output]:
-            return Response(Output(message=self.message))
+            return Response(Output(message=self.input.message))
 
     app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 
@@ -30,11 +33,14 @@ async def test_query_param_int():
     class Output(Object):
         number: int
 
-    class QueryParamHandler(Handler):
+    class QueryInput(Injectable):
         number: QueryParam[int]
 
+    class QueryParamHandler(Handler):
+        input: QueryInput
+
         async def handle(self, request: Request) -> Response[Output]:
-            return Response(Output(number=self.number))
+            return Response(Output(number=self.input.number))
 
     app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 
@@ -51,11 +57,14 @@ async def test_query_param_float():
     class Output(Object):
         temperature: float
 
-    class QueryParamHandler(Handler):
+    class QueryInput(Injectable):
         temperature: QueryParam[float]
 
+    class QueryParamHandler(Handler):
+        input: QueryInput
+
         async def handle(self, request: Request) -> Response[Output]:
-            return Response(Output(temperature=self.temperature))
+            return Response(Output(temperature=self.input.temperature))
 
     app = Fusion(routes=[Route(path="/echo", methods=["GET"], handler=QueryParamHandler)])
 

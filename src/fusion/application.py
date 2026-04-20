@@ -1,14 +1,13 @@
 import contextlib
 import typing
 
-from .middleware import Middleware
-from .request import Request
-from .routing import Route, Router
+from .route import Route
+from .router import TreeRouter
 from .types import Lifespan, Receive, Scope, Send
 
 
 @contextlib.asynccontextmanager
-async def default_lifespan(app) -> typing.AsyncIterator[dict]:
+async def default_lifespan(app: typing.Any) -> typing.AsyncIterator[dict[str, typing.Any]]:
     yield dict()
 
 
@@ -22,15 +21,15 @@ class Fusion:
         *,
         routes: list[Route],
         lifespan: Lifespan = default_lifespan,
-        middlewares: list[Middleware] | None = None,
+        # middlewares: list[Middleware] | None = None,
     ) -> None:
-        self.router = Router(routes=routes)
+        self.router = TreeRouter(routes=routes)
         self.lifespan = lifespan
-        if middlewares is not None:
-            for middleware in reversed(middlewares):
-                self.router = middleware.cls(self.router, *middleware.args, **middleware.kwargs)
+        # if middlewares is not None:
+        #     for middleware in reversed(middlewares):
+        #         self.router = middleware.cls(self.router, *middleware.args, **middleware.kwargs)
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle ASGI requests."""
         if "app" not in scope:
             scope["app"] = self
@@ -38,9 +37,7 @@ class Fusion:
         if scope["type"] == "lifespan":
             return await self.handle_lifespan(scope, receive, send)
 
-        async with Request(scope, receive, send) as request:
-            response = await self.router.handle(request)
-            await response(scope, receive, send)
+        return await self.router(scope, receive, send)
 
     async def handle_lifespan(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Handle lifespan events."""

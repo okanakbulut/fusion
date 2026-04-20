@@ -10,15 +10,20 @@ async def test_headers():
         authorization: str
         user_id: int
 
-    class AuthorizationHandler(Handler):
+    class AuthInput(Injectable):
         authorization: Header[str]
         user_id: Header[int]
+
+    class AuthorizationHandler(Handler):
+        auth: AuthInput
 
         async def handle(
             self,
             request: Request,
         ) -> Response[Output]:
-            return Response(Output(authorization=self.authorization, user_id=self.user_id))
+            return Response(
+                Output(authorization=self.auth.authorization, user_id=self.auth.user_id)
+            )
 
     app = Fusion(routes=[Route(path="/auth", methods=["GET"], handler=AuthorizationHandler)])
 

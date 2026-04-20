@@ -1,43 +1,69 @@
 import typing
-from abc import abstractmethod
 
-from .request import Request
-from .responses import Object, Response
+from typedprotocol import TypedProtocol
+
+from .types import Match, Method, Receive, Scope, Send
 
 
-@typing.runtime_checkable
-class Injectable(typing.Protocol):
+class Injectable(TypedProtocol):
+    # def __new__(cls, *args: typing.Any, **kwargs: typing.Any) -> typing.Self:
+    #     return cls.instance(*args, **kwargs)
+
     @classmethod
-    async def instance(cls) -> typing.Self:
-        ...
+    async def instance(cls) -> typing.Self: ...
 
 
-@typing.runtime_checkable
-class HttpHandler(typing.Protocol):
-    async def handle(self, request: Request) -> Response:
-        ...
+class RenderResult(TypedProtocol):
+    body: typing.Optional[bytes]
+    headers: typing.Optional[list[tuple[bytes, bytes]]]
+    cookies: typing.Optional[list[tuple[bytes, bytes]]]
 
 
-@typing.runtime_checkable
-class InjectableHandler(typing.Protocol):
-    @classmethod
-    async def instance(cls) -> typing.Self:
-        ...
+class Renderer(TypedProtocol):
+    attr_name: str
+    attr_type: type
 
-    async def handle(self, *args, **kwargs) -> Response:
-        ...
+    def render(self, obj: typing.Any) -> RenderResult: ...
 
 
-T = typing.TypeVar("T")
+class HttpConnection(TypedProtocol):
+    scope: Scope
+    receive: Receive
+    send: Send
 
 
-class Resolver(Object, typing.Generic[T]):
-    """Base class for resolvers."""
+class HttpResponse(TypedProtocol):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None: ...
+
+
+class HttpRequest(Injectable):
+    scope: Scope
+    receive: Receive
+    send: Send
+
+
+class AnnotationResolver[T](TypedProtocol):
+    """Resolver protocol for dependency resolution."""
 
     name: str
     typ: typing.Type[T]
 
-    @abstractmethod
-    async def resolve(self, request: Request) -> tuple[str, T | None]:
-        """Resolve the dependency."""
-        raise NotImplementedError("Subclasses must implement this method")
+    async def resolve(self) -> tuple[str, T | None]: ...
+
+
+class HttpHandler[TRequest: HttpRequest, TResponse: HttpResponse](TypedProtocol):
+    async def handle(self, request: TRequest) -> TResponse: ...
+
+
+class HttpMiddleware[TRequest: HttpRequest, TResponse: HttpResponse](
+    HttpHandler[TRequest, TResponse]
+):
+    app: HttpHandler[TRequest, TResponse]
+
+
+class HttpRoute[TRequest: HttpRequest, TResponse: HttpResponse](HttpHandler[TRequest, TResponse]):
+    path: str
+    method: Method
+    handler: HttpHandler[TRequest, TResponse]
+
+    def match(self, path: str, method: str) -> Match: ...
