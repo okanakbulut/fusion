@@ -115,7 +115,7 @@ async def test_lifespan_none_state_is_allowed():
 
     app = Fusion(routes=[], lifespan=none_lifespan)
     events = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
-    scope, sent = await _send_events(app, events)
+    _scope, sent = await _send_events(app, events)
 
     assert sent[0]["type"] == "lifespan.startup.complete"
 
@@ -146,7 +146,7 @@ async def test_app_sets_scope_app_ref():
 async def test_default_lifespan_yields_empty_state():
     app = Fusion(routes=[])
     events = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
-    scope, sent = await _send_events(app, events)
+    _scope, sent = await _send_events(app, events)
 
     assert sent[0]["type"] == "lifespan.startup.complete"
     assert sent[1]["type"] == "lifespan.shutdown.complete"

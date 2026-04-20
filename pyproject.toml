@@ -25,8 +25,9 @@ dev = [
     "pytest-cov",
     "pytest-mock",
     "pre-commit==4.2.0",
-    "ruff==0.12.4",
-    "commitizen==4.8.2",
+    "ruff==0.15.11",
+    "pyright==1.1.408",
+    "commitizen==4.13.10",
     "ipython",
     "httpx",
 ]
@@ -100,8 +101,8 @@ show_missing = true
 skip_covered = false
 
 [tool.pyright]
-venvPath = "/Users/okanakbulut/.virtualenvs"
-venv = "fusion"
+venvPath = "."
+venv = ".venv"
 pythonVersion = "3.14"
 exclude = ["**/__init__.py", "**/__pycache__"]
 

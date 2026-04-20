@@ -4,8 +4,9 @@ import typing
 import msgspec
 
 from .context import Context
-from .protocols import HttpRequest, HttpRoute
+from .protocols import HttpRequest
 from .responses import BadRequest, InternalServerError, MethodNotAllowed, NotFound
+from .route import Route
 from .types import Method, Receive, Scope, Send
 
 # regex to match path segments like "{path_param[:(int|uuid|/regex_pattern/)]}"
@@ -61,17 +62,17 @@ class RouteNode(msgspec.Struct):
     
     """
 
-    routes: dict[Method, HttpRoute] = msgspec.field(default_factory=lambda: dict())
+    routes: dict[Method, Route] = msgspec.field(default_factory=lambda: dict())
     children: dict[PathSegment, typing.Self] = msgspec.field(default_factory=lambda: dict())
 
 
 class TreeRouter:
-    def __init__(self, routes: list[HttpRoute]) -> None:
+    def __init__(self, routes: list[Route]) -> None:
         self.root = RouteNode()
         for route in routes:
             self._insert_route(route)
 
-    def _insert_route(self, route: HttpRoute[typing.Any, typing.Any]) -> None:
+    def _insert_route(self, route: Route[typing.Any, typing.Any]) -> None:
         current_node = self.root
 
         for segment in route.path.strip("/").split("/"):
@@ -111,7 +112,7 @@ class TreeRouter:
                 current_node = matched_child
 
             # If we reached here, we found a matching route
-            if route := current_node.routes.get(ctx.method):
+            if route := current_node.routes.get(Method(ctx.method)):
                 scope["path_params"] = path_params
                 try:
                     request_class = route.get_request_class()

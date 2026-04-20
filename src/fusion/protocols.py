@@ -63,9 +63,16 @@ class HttpMiddleware[TRequest: HttpRequest, TResponse: HttpResponse](
     app: HttpHandler[TRequest, TResponse]
 
 
+class InjectableHandler[TRequest: HttpRequest, TResponse: HttpResponse](
+    Injectable, HttpHandler[TRequest, TResponse]
+): ...
+
+
 class HttpRoute[TRequest: HttpRequest, TResponse: HttpResponse](HttpHandler[TRequest, TResponse]):
     path: str
     method: Method
     handler: HttpHandler[TRequest, TResponse]
+
+    def get_request_class(self) -> type[TRequest]: ...  # pragma: no cover
 
     def match(self, path: str, method: str) -> Match: ...  # pragma: no cover

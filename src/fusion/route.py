@@ -2,24 +2,25 @@ import typing
 
 from .middleware import Middleware
 from .object import Object
-from .protocols import HttpHandler, HttpRequest, HttpResponse, Injectable
+from .protocols import HttpHandler, HttpRequest, HttpResponse, Injectable, InjectableHandler
 from .types import Method
 
 
 class HandlerWrapper(Object):
-    Handler: type[HttpHandler]
+    Handler: type[HttpHandler[typing.Any, typing.Any]]
 
     async def handle(self, request: HttpRequest) -> HttpResponse:
         """Handle ASGI requests."""
-        handler = self.Handler()
+        handler: typing.Any = self.Handler()
         return await handler.handle(request)
 
 
 class InjectableHandlerWrapper(HandlerWrapper):
     async def handle(self, request: HttpRequest) -> HttpResponse:
         """Handle ASGI requests."""
-        handler = await self.Handler.instance()
-        return await handler.handle(request)
+        inj = typing.cast(type[InjectableHandler[typing.Any, typing.Any]], self.Handler)
+        handler = await inj.instance()
+        return typing.cast(HttpResponse, await handler.handle(request))
 
 
 class Route[TRequest: HttpRequest, TResponse: HttpResponse]:
@@ -54,7 +55,9 @@ class Route[TRequest: HttpRequest, TResponse: HttpResponse]:
         wrapper_cls = (
             InjectableHandlerWrapper if issubclass(handler, Injectable) else HandlerWrapper
         )
-        self.handler = wrapper_cls(Handler=handler)
+        self.handler = typing.cast(
+            "HttpHandler[TRequest, TResponse]", wrapper_cls(Handler=handler)
+        )
         for middleware in reversed(middlewares or []):
             self.handler = middleware.cls(self.handler, *middleware.args, **middleware.kwargs)
 

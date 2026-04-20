@@ -66,7 +66,7 @@ async def test_response_with_custom_headers():
         x: int
 
     r = Response(Out(x=1), headers={"x-request-id": "abc"})
-    status, headers, _ = await _call(r)
+    _status, headers, _ = await _call(r)
     assert headers["x-request-id"] == "abc"
 
 

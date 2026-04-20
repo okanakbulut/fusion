@@ -4,11 +4,11 @@ import typing
 
 import httpx
 
-from .types import AppType, Message, Receive, Scope, Send
+from .types import ASGIApp, Message, Receive, Scope, Send
 
 
 class LifespanManager(contextlib.AsyncExitStack):
-    def __init__(self, app: AppType) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         super().__init__()
         self.state: dict[str, typing.Any] = dict()
         self.app = self.wrap_app(app)
@@ -16,7 +16,7 @@ class LifespanManager(contextlib.AsyncExitStack):
         self.receive_queue: asyncio.Queue[Message] = asyncio.Queue()
         self.send_queue: asyncio.Queue[Message] = asyncio.Queue()
 
-    def wrap_app(self, app: AppType) -> AppType:
+    def wrap_app(self, app: ASGIApp) -> ASGIApp:
         async def wrapped_app(scope: Scope, receive: Receive, send: Send) -> None:
             scope["state"] = self.state
             await app(scope, receive, send)
@@ -34,7 +34,10 @@ class LifespanManager(contextlib.AsyncExitStack):
         async def send(message: Message) -> None:
             await self.send_queue.put(message)
 
-        self.task = asyncio.create_task(self.app(scope, receive, send))
+        app_coro = typing.cast(
+            typing.Coroutine[typing.Any, typing.Any, None], self.app(scope, receive, send)
+        )
+        self.task = asyncio.create_task(app_coro)
         # Send startup event
         await self.receive_queue.put({"type": "lifespan.startup"})
         while True:
@@ -61,7 +64,7 @@ class LifespanManager(contextlib.AsyncExitStack):
 
 @contextlib.asynccontextmanager
 async def TestClient(
-    app: AppType, base_url: str = "http://testserver", **kwargs: typing.Any
+    app: ASGIApp, base_url: str = "http://testserver", **kwargs: typing.Any
 ) -> typing.AsyncIterator[httpx.AsyncClient]:
     async with LifespanManager(app) as lifespan:
         async with httpx.AsyncClient(

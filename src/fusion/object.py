@@ -63,7 +63,7 @@ def field(
 
 
 @typing.dataclass_transform(field_specifiers=(field,))
-class MetaObject(msgspec.StructMeta):
+class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
     def __new__(
         cls,
         name: str,

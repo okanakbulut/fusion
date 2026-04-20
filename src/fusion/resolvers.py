@@ -21,7 +21,7 @@ class Resolver(Object):
     """Base class for all resolvers."""
 
     name: str
-    typ: type
+    typ: type[typing.Any]
 
     @property
     def context(self) -> Context:
