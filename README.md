@@ -5,7 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/fusion)](https://pypi.org/project/fusion/)
 [![Python](https://img.shields.io/badge/python-3.12%20|%203.13%20|%203.14-blue)](https://www.python.org)
 [![CI](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
-[![Coverage](./coverage.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/okanakbulut/fusion/main/coverage.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
 ---
