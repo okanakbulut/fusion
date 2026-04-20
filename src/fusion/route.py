@@ -55,9 +55,7 @@ class Route[TRequest: HttpRequest, TResponse: HttpResponse]:
         wrapper_cls = (
             InjectableHandlerWrapper if issubclass(handler, Injectable) else HandlerWrapper
         )
-        self.handler = typing.cast(
-            "HttpHandler[TRequest, TResponse]", wrapper_cls(Handler=handler)
-        )
+        self.handler = typing.cast("HttpHandler[TRequest, TResponse]", wrapper_cls(Handler=handler))
         for middleware in reversed(middlewares or []):
             self.handler = middleware.cls(self.handler, *middleware.args, **middleware.kwargs)
 
