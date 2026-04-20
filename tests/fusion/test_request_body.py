@@ -3,7 +3,7 @@ from typing import TypeVar
 import httpx
 import pytest
 
-from fusion import Fusion, Handler, Object, Request, RequestBody, Response, Route
+from fusion import Fusion, Handler, Injectable, Object, Request, RequestBody, Response, Route
 
 T = TypeVar("T")
 
@@ -18,11 +18,14 @@ async def test_request_body():
         name: str
         email: str
 
-    class UserHandler(Handler):
+    class UserRequest(Injectable):
         body: RequestBody[Data[User]]  # expect request body to be like this {"data": {...}}
 
+    class UserHandler(Handler):
+        request_data: UserRequest
+
         async def handle(self, request: Request) -> Response[User]:
-            user: User = self.body.data
+            user: User = self.request_data.body.data
             print(f"user id: {user.id}, name: {user.name}, email: {user.email}")
 
             return Response(user)

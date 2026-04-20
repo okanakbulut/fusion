@@ -1,102 +1,113 @@
-from collections.abc import AsyncIterator, Awaitable
+import typing
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
-from typing import (
-    Callable,
-    Generic,
-    Type,
-    TypeVar,
-    get_origin,
-)
 
 import msgspec
 
-from .protocols import Injectable, Resolver
-from .request import Request
+from .context import Context, context
+from .object import Object
 
-T = TypeVar("T")
-type Constructor[T] = Callable[[], Awaitable[T] | AbstractAsyncContextManager[T]]
-__factories__: dict[Type, Constructor] = {}
+T = typing.TypeVar("T")
+type Constructor[T] = typing.Callable[[], typing.Awaitable[T] | AbstractAsyncContextManager[T]]
+
+__factories__: dict[type[typing.Any], Constructor[typing.Any]] = {}
 
 
-class InjectableResolver(Resolver[Injectable]):
+def has_factory(typ: type[typing.Any]) -> bool:
+    return typ in __factories__
+
+
+class Resolver(Object):
+    """Base class for all resolvers."""
+
+    name: str
+    typ: type
+
+    @property
+    def context(self) -> Context:
+        if ctx := context.get(None):
+            return ctx
+        raise RuntimeError("No context available")
+
+    async def resolve(self) -> tuple[str, typing.Any]:
+        """Resolve the value from the request context."""
+        raise NotImplementedError
+
+
+class InjectableResolver(Resolver):
     """Resolver for injected dependencies."""
 
-    async def resolve(self, request: Request) -> tuple[str, Injectable]:
+    async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the injected dependency."""
-        if not request:
-            raise RuntimeError("Request is not available")
-
         return self.name, await self.typ.instance()
 
 
-def isasynccontextmanager(func: Callable) -> bool:
-    # assert hasattr(func, "__annotations__")
-    ret = func.__annotations__.get("return", None)
-    return get_origin(ret) is AsyncIterator if ret else False
+class FactoryResolver(Resolver):
+    """Resolver for third-party dependencies backed by registered factories."""
 
-
-class FactoryResolver(Resolver[T]):
-    """Resolver for factory functions."""
-
-    async def resolve(self, request: Request) -> tuple[str, T]:
-        """Resolve the factory function."""
-        factory: Constructor | None = __factories__.get(self.typ)
+    async def resolve(self) -> tuple[str, typing.Any]:
+        factory = __factories__.get(self.typ)
         if factory is None:
-            raise ValueError(f"No factory found for {self.typ}")
+            raise RuntimeError(f"No factory found for {self.typ}")
 
-        if isasynccontextmanager(factory):
-            return self.name, await request.enter_async_context(factory())  # type: ignore
+        value = factory()
+        if isinstance(value, AbstractAsyncContextManager):
+            value = await self.context.enter_async_context(value)
         else:
-            return self.name, await factory()  # type: ignore
+            value = await value
+
+        return self.name, value
 
 
-class QueryParamResolver(Resolver[T]):
+class QueryParamResolver(Resolver):
     """Resolver for query parameters."""
 
-    async def resolve(self, request: Request) -> tuple[str, T | None]:
+    async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the query parameter from the request context."""
-        value = request.query_params.get(self.name, None)
+        value = self.context.query_params.get(self.name, None)
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
-class PathParamResolver(Resolver[T]):
+class PathParamResolver(Resolver):
     """Resolver for path parameters."""
 
-    async def resolve(self, request: Request) -> tuple[str, T | None]:
+    async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the path parameter from the request context."""
-        value = request.path_params.get(self.name, None)
+        value = self.context.path_params.get(self.name, None)
         if value is not None:
             value = msgspec.convert(value, self.typ, strict=False)
         return self.name, value
 
 
-class RequestBodyResolver(Resolver[T]):
+class RequestBodyResolver(Resolver):
     """Resolver for request body parameters."""
 
-    async def resolve(self, request: Request) -> tuple[str, T]:
+    async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the request body from the request context."""
-        body = await request.body()
+        body = await self.context.body()
         value = msgspec.json.decode(body, type=self.typ, strict=True)
         return self.name, value
 
 
-class HeaderResolver(Resolver[T]):
+class HeaderResolver(Resolver):
     """Resolver for header."""
 
-    async def resolve(self, request: Request) -> tuple[str, T | None]:
+    async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the header parameter from the request context."""
-        value = request.headers.get(self.name, None)
+        value = self.context.headers.get(self.name, None)
+        if value is None:
+            raise ValueError(f"Missing header '{self.name}'")
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
-class CookieResolver(Resolver[T]):
+class CookieResolver(Resolver):
     """Resolver for cookie."""
 
-    async def resolve(self, request: Request) -> tuple[str, T | None]:
+    async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the cookie parameter from the request context."""
         cookies = {
             key.lower().replace("-", "_").replace(" ", "_"): value
-            for key, value in request.cookies.items()
+            for key, value in self.context.cookies.items()
         }
         value = cookies.get(self.name, None)
         if value is not None:

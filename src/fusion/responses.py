@@ -3,8 +3,7 @@ import typing
 import msgspec
 
 
-class Object(msgspec.Struct, gc=False):
-    ...
+class Object(msgspec.Struct, gc=False): ...
 
 
 class Error(Object, omit_defaults=True):
@@ -31,7 +30,6 @@ T = typing.TypeVar("T", bound=Object)
 class Response(Object, typing.Generic[T]):
     encoder: typing.ClassVar[msgspec.json.Encoder] = msgspec.json.Encoder()
     status_code: typing.ClassVar[int] = 200
-
     content: T | str | None = None
     headers: typing.Mapping[str, str] | None = None
     media_type: str = "application/json"
@@ -47,40 +45,42 @@ class Response(Object, typing.Generic[T]):
             for k, v in self.headers.items():
                 raw_headers.append((k.encode("latin-1"), v.encode("latin-1")))
 
-        await send(
-            {
-                "type": "http.response.start",
-                "status": self.status_code,
-                "headers": raw_headers,
-            }
-        )
+        await send({
+            "type": "http.response.start",
+            "status": self.status_code,
+            "headers": raw_headers,
+        })
 
         await send({"type": "http.response.body", "body": body})
 
 
-class Created(Response[T]):
+class Created(Response):
     status_code: typing.ClassVar[int] = 201
 
 
-class NoContent(Response[T]):
+class NoContent(Response):
     status_code: typing.ClassVar[int] = 204
 
 
-class BadRequest(Response[Error]):
+class BadRequest(Response):
     status_code: typing.ClassVar[int] = 400
 
 
-class Unauthorized(Response[Error]):
+class Unauthorized(Response):
     status_code: typing.ClassVar[int] = 401
 
 
-class Forbidden(Response[Error]):
+class Forbidden(Response):
     status_code: typing.ClassVar[int] = 403
 
 
-class NotFound(Response[Error]):
+class NotFound(Response):
     status_code: typing.ClassVar[int] = 404
 
 
-class InternalServerError(Response[Error]):
+class MethodNotAllowed(Response):
+    status_code: typing.ClassVar[int] = 405
+
+
+class InternalServerError(Response):
     status_code: typing.ClassVar[int] = 500
