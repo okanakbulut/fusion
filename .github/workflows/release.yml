@@ -48,6 +48,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Generate coverage badge
+        run: |
+          uv run pytest --cov=fusion --cov-report=xml -q
+          uv run coverage-badge -o coverage.svg -f
+
       - name: Bump version
         id: bump
         run: |
@@ -58,6 +63,12 @@ jobs:
             uv run cz bump --increment ${{ inputs.bump }} --yes --changelog $DRY_RUN
           fi
           echo "version=$(uv run cz version --project)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit coverage badge
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git add coverage.svg
+          git diff --cached --quiet || git commit -m "chore: update coverage badge"
 
       - name: Push tag and changelog
         if: ${{ inputs.dry_run != true }}
