@@ -47,11 +47,14 @@ jobs:
         id: bump
         run: |
           if [ "${{ inputs.bump }}" = "auto" ]; then
-            uv run cz bump --yes --changelog --push
+            uv run cz bump --yes --changelog
           else
-            uv run cz bump --increment ${{ inputs.bump }} --yes --changelog --push
+            uv run cz bump --increment ${{ inputs.bump }} --yes --changelog
           fi
           echo "version=$(uv run cz version --project)" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag and changelog
+        run: git push --follow-tags
 
   build:
     name: Build distributions
