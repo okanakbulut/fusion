@@ -2,8 +2,10 @@
 
 > A modern, async-first ASGI web framework for Python with type-safe dependency injection.
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue)](https://github.com/okanakbulut/fusion)
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org)
+[![PyPI](https://img.shields.io/pypi/v/fusion)](https://pypi.org/project/fusion/)
+[![Python](https://img.shields.io/badge/python-3.12%20|%203.13%20|%203.14-blue)](https://www.python.org)
+[![CI](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
+[![Coverage](./coverage.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
 
 ---
