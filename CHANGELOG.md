@@ -1,3 +1,14 @@
+## v0.6.0 (2026-04-20)
+
+### Feat
+
+- generate and commit coverage badge on release
+
+### Fix
+
+- skip --changelog when previous tag is missing
+- replace coverage-badge with inline script for Python 3.14 compatibility
+
 ## v0.5.0 (2026-04-20)
 
 ### Feat
