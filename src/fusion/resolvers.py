@@ -97,10 +97,10 @@ class RequestBodyResolver(Resolver):
 
         try:
             return self.name, msgspec.json.decode(body, type=self.typ, strict=True)
-        except msgspec.DecodeError as exc:
-            raise ValidationException(detail=str(exc)) from exc
         except msgspec.ValidationError:
             pass
+        except msgspec.DecodeError as exc:
+            raise ValidationException(detail=str(exc)) from exc
 
         try:
             raw = msgspec.json.decode(body)

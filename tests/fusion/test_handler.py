@@ -26,6 +26,14 @@ class MyResponse(Object):
         )
 
 
+def test_handler_get_request_class():
+    class MyHandler(Handler):
+        async def handle(self, request: Request) -> Response:
+            return Response(None)
+
+    assert MyHandler().get_request_class() is Request
+
+
 def test_handler_protocol_compliance():
     class BaseRequest(Object):
         @classmethod

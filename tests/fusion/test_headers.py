@@ -1,6 +1,5 @@
-import pytest
-
 import msgspec
+import pytest
 
 from fusion import Cookie, Fusion, Handler, Header, Object, Request, Response, Route
 from fusion.testing import TestClient
