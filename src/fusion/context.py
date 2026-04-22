@@ -4,6 +4,7 @@ import typing
 from urllib.parse import parse_qsl
 
 from ._utils import cached_property
+from .exceptions import ValidationException
 from .types import Receive, Scope, Send
 
 context: contextvars.ContextVar[Context] = contextvars.ContextVar("context")
@@ -79,8 +80,8 @@ class Context(contextlib.AsyncExitStack):
                 if chunk:
                     total += len(chunk)
                     if total > MAX_BODY_SIZE:
-                        raise ValueError(
-                            f"Request body exceeds maximum size of {MAX_BODY_SIZE} bytes"
+                        raise ValidationException(
+                            detail=f"Request body exceeds maximum size of {MAX_BODY_SIZE} bytes"
                         )
                     chunks.append(chunk)
                 if not message.get("more_body", False):

@@ -1,6 +1,12 @@
+import typing
+
+import msgspec
+
 from .annotations import Cookie, Header, PathParam, QueryParam, RequestBody
 from .context import context
+from .exceptions import ValidationException
 from .injectable import Injectable
+from .responses import FieldError
 from .types import Receive, Scope, Send
 
 
@@ -60,3 +66,29 @@ class Request(Injectable):
 
     async def body(self) -> bytes:
         return await context.get().body()
+
+    @classmethod
+    async def instance(cls) -> typing.Self:
+        params: dict[str, typing.Any] = {}
+        errors: list[FieldError] = []
+
+        for resolver in cls.__resolvers__.values():
+            try:
+                name, value = await resolver.resolve()
+                params[name] = value
+            except ValidationException as exc:
+                if exc.errors:
+                    errors.extend(exc.errors)
+                elif exc.detail:
+                    location = getattr(resolver, "location", "unknown")
+                    errors.append(
+                        FieldError(field=resolver.name, location=location, message=exc.detail)
+                    )
+            except msgspec.ValidationError as exc:
+                location = getattr(resolver, "location", "unknown")
+                errors.append(FieldError(field=resolver.name, location=location, message=str(exc)))
+
+        if errors:
+            raise ValidationException(errors=errors)
+
+        return cls(**params)
