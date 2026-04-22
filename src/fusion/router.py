@@ -4,8 +4,15 @@ import typing
 import msgspec
 
 from .context import Context
+from .exceptions import ValidationException
 from .protocols import HttpRequest
-from .responses import BadRequest, InternalServerError, MethodNotAllowed, NotFound
+from .responses import (
+    BadRequest,
+    InternalServerError,
+    MethodNotAllowed,
+    NotFound,
+    ValidationProblem,
+)
 from .route import Route
 from .types import Method, Receive, Scope, Send
 
@@ -118,8 +125,8 @@ class TreeRouter:
                     request_class = route.get_request_class()
                     request = await request_class.instance()
                     response = await route.handle(request)
-                except (ValueError, msgspec.ValidationError) as exc:
-                    response = BadRequest(detail=str(exc))
+                except ValidationException as exc:
+                    response = ValidationProblem(errors=exc.errors, detail=exc.detail)
                 except Exception:
                     # TODO: log the exception here
                     response = InternalServerError()

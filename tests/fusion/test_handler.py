@@ -5,7 +5,7 @@ import pytest
 
 from fusion import Fusion, Handler, Object, Request, Response, Route
 from fusion.protocols import HttpHandler
-from fusion.responses import BadRequest, FieldError, NotFound, ValidationError
+from fusion.responses import BadRequest, FieldError, NotFound, ValidationProblem
 from fusion.types import Receive, Scope, Send
 
 
@@ -183,12 +183,12 @@ async def test_method_not_allowed_returns_problem_json():
 @pytest.mark.asyncio
 async def test_validation_error_with_field_errors():
     class CreateHandler(Handler):
-        async def handle(self, request: Request) -> ValidationError | Response[Object]:
-            return ValidationError(
+        async def handle(self, request: Request) -> ValidationProblem | Response[Object]:
+            return ValidationProblem(
                 detail="Validation failed",
                 errors=[
-                    FieldError(field="email", message="invalid format"),
-                    FieldError(field="name", message="required"),
+                    FieldError(field="email", location="body", message="invalid format"),
+                    FieldError(field="name", location="body", message="required"),
                 ],
             )
 
@@ -210,8 +210,8 @@ async def test_validation_error_with_field_errors():
     assert body["status"] == 400
     assert body["detail"] == "Validation failed"
     assert body["errors"] == [
-        {"field": "email", "message": "invalid format"},
-        {"field": "name", "message": "required"},
+        {"field": "email", "location": "body", "message": "invalid format"},
+        {"field": "name", "location": "body", "message": "required"},
     ]
 
 

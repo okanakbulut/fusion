@@ -5,7 +5,9 @@ from contextlib import AbstractAsyncContextManager
 import msgspec
 
 from .context import Context, context
+from .exceptions import ValidationException
 from .object import Object
+from .responses import FieldError
 
 T = typing.TypeVar("T")
 type Constructor[T] = typing.Callable[[], typing.Awaitable[T] | AbstractAsyncContextManager[T]]
@@ -62,6 +64,8 @@ class FactoryResolver(Resolver):
 class QueryParamResolver(Resolver):
     """Resolver for query parameters."""
 
+    location: typing.ClassVar[str] = "query"
+
     async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the query parameter from the request context."""
         value = self.context.query_params.get(self.name, None)
@@ -71,37 +75,87 @@ class QueryParamResolver(Resolver):
 class PathParamResolver(Resolver):
     """Resolver for path parameters."""
 
+    location: typing.ClassVar[str] = "path"
+
     async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the path parameter from the request context."""
         value = self.context.path_params.get(self.name, None)
-        if value is not None:
-            value = msgspec.convert(value, self.typ, strict=False)
-        return self.name, value
+        return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
 class RequestBodyResolver(Resolver):
     """Resolver for request body parameters."""
 
+    location: typing.ClassVar[str] = "body"
+
     async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the request body from the request context."""
         body = await self.context.body()
-        value = msgspec.json.decode(body, type=self.typ, strict=True)
-        return self.name, value
+
+        if not (isinstance(self.typ, type) and issubclass(self.typ, msgspec.Struct)):
+            return self.name, msgspec.json.decode(body, type=self.typ, strict=True)
+
+        try:
+            return self.name, msgspec.json.decode(body, type=self.typ, strict=True)
+        except msgspec.DecodeError as exc:
+            raise ValidationException(detail=str(exc)) from exc
+        except msgspec.ValidationError:
+            pass
+
+        try:
+            raw = msgspec.json.decode(body)
+        except msgspec.DecodeError as exc:
+            raise ValidationException(detail=str(exc)) from exc
+
+        if not isinstance(raw, dict):
+            raise ValidationException(detail="Request body must be a JSON object")
+
+        field_errors: list[FieldError] = []
+        params: dict[str, typing.Any] = {}
+
+        for field in msgspec.structs.fields(self.typ):
+            if field.encode_name in raw:
+                try:
+                    params[field.name] = msgspec.convert(
+                        raw[field.encode_name], field.type, strict=False
+                    )
+                except msgspec.ValidationError as exc:
+                    field_errors.append(
+                        FieldError(field=field.name, location="body", message=str(exc))
+                    )
+            elif field.default is not msgspec.NODEFAULT:
+                params[field.name] = field.default
+            elif field.default_factory is not msgspec.NODEFAULT:
+                params[field.name] = field.default_factory()
+            else:
+                try:
+                    msgspec.convert(None, field.type, strict=False)
+                except msgspec.ValidationError as exc:
+                    field_errors.append(
+                        FieldError(field=field.name, location="body", message=str(exc))
+                    )
+
+        if field_errors:
+            raise ValidationException(errors=field_errors)
+
+        return self.name, self.typ(**params)
 
 
 class HeaderResolver(Resolver):
     """Resolver for header."""
 
+    location: typing.ClassVar[str] = "header"
+
     async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the header parameter from the request context."""
         value = self.context.headers.get(self.name, None)
-        if value is None:
-            raise ValueError(f"Missing header '{self.name}'")
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
 class CookieResolver(Resolver):
     """Resolver for cookie."""
+
+    location: typing.ClassVar[str] = "cookie"
 
     async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the cookie parameter from the request context."""
@@ -110,6 +164,4 @@ class CookieResolver(Resolver):
             for key, value in self.context.cookies.items()
         }
         value = cookies.get(self.name, None)
-        if value is not None:
-            value = msgspec.convert(value, self.typ, strict=False)
-        return self.name, value
+        return self.name, msgspec.convert(value, self.typ, strict=False)

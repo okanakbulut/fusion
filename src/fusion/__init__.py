@@ -18,6 +18,6 @@ from .responses import (
     Problem,
     Response,
     Unauthorized,
-    ValidationError,
+    ValidationProblem,
 )
 from .route import Delete, Get, Head, Options, Patch, Post, Put, Route

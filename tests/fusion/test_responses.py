@@ -19,7 +19,7 @@ from fusion.responses import (
     Problem,
     Response,
     Unauthorized,
-    ValidationError,
+    ValidationProblem,
 )
 
 # ---------------------------------------------------------------------------
@@ -163,15 +163,15 @@ async def test_custom_problem_subclass():
 async def test_validation_error_includes_field_errors():
     from fusion.responses import FieldError
 
-    r = ValidationError(
+    r = ValidationProblem(
         detail="failed",
-        errors=[FieldError(field="email", message="invalid")],
+        errors=[FieldError(field="email", location="body", message="invalid")],
     )
     _, _, body = await _call(r)
     import json
 
     data = json.loads(body)
-    assert data["errors"] == [{"field": "email", "message": "invalid"}]
+    assert data["errors"] == [{"field": "email", "location": "body", "message": "invalid"}]
 
 
 @pytest.mark.asyncio

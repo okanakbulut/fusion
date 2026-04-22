@@ -108,10 +108,11 @@ class InternalServerError(Problem):
 
 class FieldError(Object):
     field: str
+    location: str
     message: str
 
 
-class ValidationError(BadRequest):
+class ValidationProblem(BadRequest):
     errors: list[FieldError] | None = None
 
     @property
