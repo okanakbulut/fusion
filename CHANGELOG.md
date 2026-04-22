@@ -1,3 +1,13 @@
+## v0.7.0 (2026-04-22)
+
+### Feat
+
+- structured RFC-9457 validation errors with per-field details
+
+### Fix
+
+- swap except order in RequestBodyResolver and add two-pass coverage tests
+
 ## v0.6.1 (2026-04-20)
 
 ### Fix
