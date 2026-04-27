@@ -10,6 +10,7 @@ authors = [
 ]
 dependencies = [
  "msgspec>=0.21.1",
+ "pypika>=0.51.1",
  "typedprotocol>=0.1.0",
 ]
 
@@ -74,10 +75,11 @@ major_version_zero = true
 addopts = [
     "--import-mode=importlib",
     "--doctest-modules",
+    "--doctest-glob=docs/*.md",
     "--quiet",
     "--tb=long",
 ]
-testpaths = ["tests", "src/fusion"]
+testpaths = ["tests", "src/fusion", "docs"]
 
 [tool.coverage.run]
 branch = true
