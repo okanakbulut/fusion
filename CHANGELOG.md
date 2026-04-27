@@ -1,3 +1,14 @@
+## v0.8.0 (2026-04-27)
+
+### Feat
+
+- add fusion.orm — Postgres ORM submodule
+
+### Fix
+
+- resolve pyright type errors in query.py
+- resolve all ruff lint issues in fusion.orm
+
 ## v0.7.0 (2026-04-22)
 
 ### Feat
