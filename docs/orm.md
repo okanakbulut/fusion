@@ -434,6 +434,66 @@ After a join, WHERE conditions on joined table columns are automatically qualifi
 
 ```
 
+#### Explicit join columns
+
+When no `ForeignKey` exists between two models, pass `on=(LeftModel.col, RightModel.col)` using the field descriptors directly:
+
+```python
+>>> class Employee(Model):
+...     id: int | None = None
+...     department_id: int
+...     name: str
+
+>>> class Department(Model):
+...     id: int | None = None
+...     name: str
+
+>>> sql, params = Employee.select().join(Department, on=(Employee.department_id, Department.id)).build()
+>>> sql
+'SELECT * FROM "employees" JOIN "departments" ON "employees"."department_id"="departments"."id"'
+
+```
+
+`how` works the same way:
+
+```python
+>>> sql, params = Employee.select().join(Department, on=(Employee.department_id, Department.id), how="left").build()
+>>> sql
+'SELECT * FROM "employees" LEFT JOIN "departments" ON "employees"."department_id"="departments"."id"'
+
+```
+
+For joins on multiple columns, pass a list of pairs — each pair is AND'd in the ON clause:
+
+```python
+>>> class Product(Model):
+...     id: int | None = None
+...     sku: str
+...     region: str
+
+>>> class Price(Model):
+...     id: int | None = None
+...     sku: str
+...     region: str
+...     amount: int
+
+>>> sql, params = Product.select().join(
+...     Price, on=[(Product.sku, Price.sku), (Product.region, Price.region)]
+... ).build()
+>>> sql
+'SELECT * FROM "products" JOIN "prices" ON "products"."sku"="prices"."sku" AND "products"."region"="prices"."region"'
+
+```
+
+Explicit `on` also overrides FK inference when you need a non-standard join column. Here `Post` has a `ForeignKey("author_id", Author)`, but we join on a different column pair instead:
+
+```python
+>>> sql, params = Post.select().join(Author, on=(Post.title, Author.email)).build()
+>>> sql
+'SELECT * FROM "posts" JOIN "authors" ON "posts"."title"="authors"."email"'
+
+```
+
 ### INSERT
 
 `INSERT` always appends `RETURNING *`. The database fills in `id` and any DB-sentinel defaults; the returned rows are fully populated model instances.
