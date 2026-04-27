@@ -31,7 +31,7 @@ LOOKUP_OPS = {
     "lte": lambda col, p: col <= p,
     "like": lambda col, p: col.like(p),
     "ilike": lambda col, p: col.ilike(p),
-    "in": lambda col, p: col == pypika.terms.Array(*p) if False else col.isin(p),
+    "in": lambda col, p: col.isin(p),
     "is_null": lambda col, _p: col.isnull(),
     "is_not_null": lambda col, _p: col.isnotnull(),
 }
@@ -55,9 +55,6 @@ def _build_criterion(
             idx = len(params) + 1
             if cond.lookup == "in":
                 params.append(list(cond.value))
-                criteria.append(col == pypika.terms.ValueWrapper(Parameter(f"${idx}")))
-                # override: use ANY for postgres-style array IN
-                criteria.pop()
                 criteria.append(col.isin(Parameter(f"${idx}")))
             else:
                 params.append(cond.value)
@@ -111,7 +108,7 @@ class SelectQuery:
         self._columns = columns
         self._wheres: list[Q | Condition] = []
         self._raw_wheres: list[str] = []
-        self._joins: list[tuple[type, str | None, str]] = []
+        self._joins: list[tuple[type, dict[str, str] | None, str]] = []
         self._order: list[tuple[str, bool]] = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
@@ -267,7 +264,7 @@ class InsertQuery:
             base = len(params) - len(row_params) + 1
             q = q.insert(*[Parameter(f"${base + i}") for i in range(len(row_params))])
 
-        q = q.returning("*")
+        q = q.returning("*")  # type: ignore[attr-defined]
         return q.get_sql(), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
@@ -316,7 +313,7 @@ class UpdateQuery:
             if criterion is not None:
                 q = q.where(criterion)
 
-        q = q.returning("*")
+        q = q.returning("*")  # type: ignore[attr-defined]
         return q.get_sql(), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
@@ -350,7 +347,7 @@ class DeleteQuery:
             if criterion is not None:
                 q = q.where(criterion)
 
-        q = q.returning("*")
+        q = q.returning("*")  # type: ignore[attr-defined]
         return q.get_sql(), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
