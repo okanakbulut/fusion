@@ -1,3 +1,13 @@
+## v0.8.1 (2026-04-27)
+
+### Feat
+
+- add explicit on= join columns using field descriptors
+
+### Fix
+
+- apply ruff format and add format-check pre-commit hook
+
 ## v0.8.0 (2026-04-27)
 
 ### Feat
