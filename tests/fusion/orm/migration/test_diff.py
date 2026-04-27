@@ -50,7 +50,10 @@ def test_create_table_includes_columns():
 def test_add_nullable_column_produces_add_column_change():
     before = _snap(("users", _table({"id": _col("SERIAL", primary_key=True)})))
     after = _snap(
-        ("users", _table({"id": _col("SERIAL", primary_key=True), "bio": _col("TEXT", nullable=True)}))
+        (
+            "users",
+            _table({"id": _col("SERIAL", primary_key=True), "bio": _col("TEXT", nullable=True)}),
+        )
     )
     changes = diff(before, after)
     assert any(c["op"] == "add_column" and c["column"] == "bio" for c in changes)
@@ -59,7 +62,10 @@ def test_add_nullable_column_produces_add_column_change():
 def test_add_column_change_includes_type_and_nullable():
     before = _snap(("users", _table({"id": _col("SERIAL", primary_key=True)})))
     after = _snap(
-        ("users", _table({"id": _col("SERIAL", primary_key=True), "bio": _col("TEXT", nullable=True)}))
+        (
+            "users",
+            _table({"id": _col("SERIAL", primary_key=True), "bio": _col("TEXT", nullable=True)}),
+        )
     )
     changes = diff(before, after)
     add = next(c for c in changes if c["op"] == "add_column")
@@ -117,7 +123,13 @@ def test_drop_table_with_flag_produces_drop_table_change():
 def test_add_unique_constraint():
     before = _snap(("users", _table({"id": _col("SERIAL", primary_key=True)})))
     after = _snap(
-        ("users", _table({"id": _col("SERIAL", primary_key=True)}, constraints=[{"type": "unique", "columns": ["email"]}]))
+        (
+            "users",
+            _table(
+                {"id": _col("SERIAL", primary_key=True)},
+                constraints=[{"type": "unique", "columns": ["email"]}],
+            ),
+        )
     )
     changes = diff(before, after)
     assert any(c["op"] == "add_constraint" for c in changes)
@@ -126,7 +138,10 @@ def test_add_unique_constraint():
 def test_add_index():
     before = _snap(("users", _table({"id": _col("SERIAL", primary_key=True)})))
     after = _snap(
-        ("users", _table({"id": _col("SERIAL", primary_key=True)}, indexes=[{"columns": ["email"]}]))
+        (
+            "users",
+            _table({"id": _col("SERIAL", primary_key=True)}, indexes=[{"columns": ["email"]}]),
+        )
     )
     changes = diff(before, after)
     assert any(c["op"] == "create_index" for c in changes)

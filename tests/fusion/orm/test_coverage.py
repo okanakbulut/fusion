@@ -162,12 +162,14 @@ def test_join_without_fk_produces_join_without_on():
 
 def test_exists_returns_exists_expression():
     from fusion.orm.query import ExistsExpression
+
     e = Post.select().where(user_id=1).exists()
     assert isinstance(e, ExistsExpression)
 
 
 def test_exists_invert():
     from fusion.orm.query import ExistsExpression
+
     e = ~Post.select().where(user_id=1).exists()
     assert isinstance(e, ExistsExpression)
     assert e._negated is True

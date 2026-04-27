@@ -67,21 +67,25 @@ class Model(Object, metaclass=MetaModel):
     @classmethod
     def select(cls, *columns: str) -> SelectQuery:
         from .query import SelectQuery
+
         return SelectQuery(cls, columns)
 
     @classmethod
     def insert(cls) -> InsertQuery:
         from .query import InsertQuery
+
         return InsertQuery(cls)
 
     @classmethod
     def update(cls) -> UpdateQuery:
         from .query import UpdateQuery
+
         return UpdateQuery(cls)
 
     @classmethod
     def delete(cls) -> DeleteQuery:
         from .query import DeleteQuery
+
         return DeleteQuery(cls)
 
 

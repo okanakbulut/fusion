@@ -142,9 +142,7 @@ def test_indexes_in_snapshot():
 def test_composite_index_in_snapshot():
     result = serialize([Post])
     indexes = result["tables"]["posts"]["indexes"]
-    assert any(
-        set(idx["columns"]) == {"user_id", "created_at"} for idx in indexes
-    )
+    assert any(set(idx["columns"]) == {"user_id", "created_at"} for idx in indexes)
 
 
 def test_db_uuid_column_has_gen_random_uuid_default():

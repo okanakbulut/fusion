@@ -173,7 +173,10 @@ def test_select_pagination_chain():
         .offset(20)
         .build()
     )
-    assert sql == 'SELECT * FROM "posts" WHERE "user_id"=$1 ORDER BY "created_at" DESC LIMIT 10 OFFSET 20'
+    assert (
+        sql
+        == 'SELECT * FROM "posts" WHERE "user_id"=$1 ORDER BY "created_at" DESC LIMIT 10 OFFSET 20'
+    )
     assert params == [1]
 
 
@@ -213,25 +216,37 @@ def test_select_inner_join_infers_on_clause():
 
 def test_select_left_join():
     sql, params = Article.select().join(Author, how="left").build()
-    assert sql == 'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    assert (
+        sql
+        == 'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    )
     assert params == []
 
 
 def test_select_right_join():
     sql, params = Article.select().join(Author, how="right").build()
-    assert sql == 'SELECT * FROM "articles" RIGHT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    assert (
+        sql
+        == 'SELECT * FROM "articles" RIGHT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    )
     assert params == []
 
 
 def test_select_outer_join():
     sql, params = Article.select().join(Author, how="outer").build()
-    assert sql == 'SELECT * FROM "articles" FULL OUTER JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    assert (
+        sql
+        == 'SELECT * FROM "articles" FULL OUTER JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    )
     assert params == []
 
 
 def test_select_join_with_where():
     sql, params = Article.select().join(Author).where(author_id=1).build()
-    assert sql == 'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id" WHERE "articles"."author_id"=$1'
+    assert (
+        sql
+        == 'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id" WHERE "articles"."author_id"=$1'
+    )
     assert params == [1]
 
 
@@ -288,8 +303,7 @@ def test_insert_bulk_values():
     p2 = Post(user_id=2, title="second")
     sql, params = Post.insert().values([p1, p2]).build()
     assert sql == (
-        'INSERT INTO "posts" ("user_id","title","body") '
-        'VALUES ($1,$2,$3),($4,$5,$6) RETURNING *'
+        'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3),($4,$5,$6) RETURNING *'
     )
     assert params == [1, "first", None, 2, "second", None]
 
