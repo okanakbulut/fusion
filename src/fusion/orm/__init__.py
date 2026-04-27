@@ -6,17 +6,17 @@ from .fields import field as field
 from .model import Model
 
 __all__ = [
-    "Model",
     "DBField",
-    "field",
+    "Exp",
+    "ForeignKey",
+    "Index",
+    "Model",
+    "Q",
+    "UniqueConstraint",
+    "cte",
     "db_now",
     "db_uuid",
-    "Q",
-    "Exp",
-    "union",
-    "cte",
+    "field",
     "recursive_cte",
-    "ForeignKey",
-    "UniqueConstraint",
-    "Index",
+    "union",
 ]

@@ -3,9 +3,8 @@
 import msgspec
 import pytest
 
-from fusion.orm.fields import DBField, db_now, db_uuid, field
 from fusion.object import Field
-
+from fusion.orm.fields import DBField, db_now, db_uuid, field
 
 # ---------------------------------------------------------------------------
 # DBField is a Field subclass

@@ -20,7 +20,7 @@ class Exp:
 
 
 class UnionQuery:
-    def __init__(self, queries: list["SelectQuery"], *, all: bool = False) -> None:
+    def __init__(self, queries: list[SelectQuery], *, all: bool = False) -> None:
         self._queries = queries
         self._all = all
 
@@ -47,8 +47,8 @@ class UnionQuery:
 class CTEQuery:
     def __init__(
         self,
-        main: "SelectQuery",
-        ctes: dict[str, "SelectQuery | UnionQuery"],
+        main: SelectQuery,
+        ctes: dict[str, SelectQuery | UnionQuery],
         *,
         recursive: bool = False,
     ) -> None:
@@ -80,13 +80,13 @@ class CTEQuery:
         return [dict(r.items()) for r in records]
 
 
-def union(*queries: "SelectQuery", all: bool = False) -> UnionQuery:
+def union(*queries: SelectQuery, all: bool = False) -> UnionQuery:
     return UnionQuery(list(queries), all=all)
 
 
-def cte(*, main: "SelectQuery", **named_ctes: "SelectQuery | UnionQuery") -> CTEQuery:
+def cte(*, main: SelectQuery, **named_ctes: SelectQuery | UnionQuery) -> CTEQuery:
     return CTEQuery(main, named_ctes)
 
 
-def recursive_cte(*, main: "SelectQuery", **named_ctes: "SelectQuery | UnionQuery") -> CTEQuery:
+def recursive_cte(*, main: SelectQuery, **named_ctes: SelectQuery | UnionQuery) -> CTEQuery:
     return CTEQuery(main, named_ctes, recursive=True)

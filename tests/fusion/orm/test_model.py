@@ -8,7 +8,6 @@ from fusion.orm.constraints import ForeignKey, Index, UniqueConstraint
 from fusion.orm.fields import field
 from fusion.orm.model import Model
 
-
 # ---------------------------------------------------------------------------
 # Table name derivation
 # ---------------------------------------------------------------------------
@@ -31,7 +30,7 @@ def test_multi_word_name_is_snake_case_plural():
 
 
 def test_already_snake_name_is_pluralized():
-    class audit_log(Model):  # noqa: N801
+    class audit_log(Model):
         id: int | None = None
 
     assert audit_log.__table_name__ == "audit_logs"

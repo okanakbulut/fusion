@@ -2,8 +2,8 @@ import typing
 
 import pypika
 from pypika import Order, Parameter, Table
-from pypika.dialects import PostgreSQLQuery
 from pypika import functions as fn
+from pypika.dialects import PostgreSQLQuery
 from pypika.terms import LiteralValue
 
 from .column import Condition
@@ -94,7 +94,7 @@ def _q_to_criterion(
 
 
 def _where_arg_to_criterion(
-    arg: "Q | Condition",
+    arg: Q | Condition,
     table: Table,
     params: list[typing.Any],
 ) -> pypika.Criterion | None:
@@ -106,7 +106,7 @@ def _where_arg_to_criterion(
 
 
 class SelectQuery:
-    def __init__(self, model: "type[Model]", columns: tuple[str, ...]) -> None:
+    def __init__(self, model: type[Model], columns: tuple[str, ...]) -> None:
         self._model = model
         self._columns = columns
         self._wheres: list[Q | Condition] = []
@@ -116,7 +116,7 @@ class SelectQuery:
         self._limit_val: int | None = None
         self._offset_val: int | None = None
 
-    def where(self, *args: "Q | Condition", **kwargs: typing.Any) -> "SelectQuery":
+    def where(self, *args: Q | Condition, **kwargs: typing.Any) -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
         for arg in args:
@@ -125,7 +125,7 @@ class SelectQuery:
             q._wheres.append(Q(**kwargs))
         return q
 
-    def where_raw(self, exp: "typing.Any") -> "SelectQuery":
+    def where_raw(self, exp: typing.Any) -> SelectQuery:
         from .expressions import Exp
 
         q = SelectQuery.__new__(SelectQuery)
@@ -134,25 +134,27 @@ class SelectQuery:
             q._raw_wheres.append(exp.sql)
         return q
 
-    def join(self, model: "type[Model]", *, on: dict[str, str] | None = None, how: str = "inner") -> "SelectQuery":
+    def join(
+        self, model: type[Model], *, on: dict[str, str] | None = None, how: str = "inner"
+    ) -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__, "_joins": list(self._joins)}
         q._joins.append((model, on, how))
         return q
 
-    def order_by(self, column: str, *, desc: bool = False) -> "SelectQuery":
+    def order_by(self, column: str, *, desc: bool = False) -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__, "_order": list(self._order)}
         q._order.append((column, desc))
         return q
 
-    def limit(self, n: int) -> "SelectQuery":
+    def limit(self, n: int) -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__}
         q._limit_val = n
         return q
 
-    def offset(self, n: int) -> "SelectQuery":
+    def offset(self, n: int) -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__}
         q._offset_val = n
@@ -167,7 +169,7 @@ class SelectQuery:
         else:
             q = PostgreSQLQuery.from_(table).select("*")
 
-        for join_model, on, how in self._joins:
+        for join_model, _on, how in self._joins:
             join_table = _make_table(join_model)
             on_clause = _infer_join_on(self._model, join_model, table, join_table)
             join_fn = getattr(q, _JOIN_METHODS.get(how, "join"))
@@ -214,7 +216,7 @@ class SelectQuery:
             return None
         return _row_to_model(self._model, record)
 
-    def exists(self) -> "ExistsExpression":
+    def exists(self) -> ExistsExpression:
         return ExistsExpression(self)
 
 
@@ -223,18 +225,18 @@ class ExistsExpression:
         self._query = query
         self._negated = False
 
-    def __invert__(self) -> "ExistsExpression":
+    def __invert__(self) -> ExistsExpression:
         e = ExistsExpression(self._query)
         e._negated = not self._negated
         return e
 
 
 class InsertQuery:
-    def __init__(self, model: "type[Model]") -> None:
+    def __init__(self, model: type[Model]) -> None:
         self._model = model
         self._rows: list[typing.Any] = []
 
-    def values(self, rows: typing.Any) -> "InsertQuery":
+    def values(self, rows: typing.Any) -> InsertQuery:
         q = InsertQuery.__new__(InsertQuery)
         q.__dict__ = {**self.__dict__}
         if isinstance(rows, list):
@@ -260,10 +262,10 @@ class InsertQuery:
             row_params: list[typing.Any] = []
             for col in columns:
                 val = getattr(row, col)
-                idx = len(params) + len(row_params) + 1
                 row_params.append(val)
                 params.append(val)
-            q = q.insert(*[Parameter(f"${len(params) - len(row_params) + i + 1}") for i in range(len(row_params))])
+            base = len(params) - len(row_params) + 1
+            q = q.insert(*[Parameter(f"${base + i}") for i in range(len(row_params))])
 
         q = q.returning("*")
         return q.get_sql(), params
@@ -275,17 +277,17 @@ class InsertQuery:
 
 
 class UpdateQuery:
-    def __init__(self, model: "type[Model]") -> None:
+    def __init__(self, model: type[Model]) -> None:
         self._model = model
         self._sets: dict[str, typing.Any] = {}
         self._wheres: list[Q | Condition] = []
 
-    def set(self, **kwargs: typing.Any) -> "UpdateQuery":
+    def set(self, **kwargs: typing.Any) -> UpdateQuery:
         q = UpdateQuery.__new__(UpdateQuery)
         q.__dict__ = {**self.__dict__, "_sets": {**self._sets, **kwargs}}
         return q
 
-    def where(self, *args: "Q | Condition", **kwargs: typing.Any) -> "UpdateQuery":
+    def where(self, *args: Q | Condition, **kwargs: typing.Any) -> UpdateQuery:
         q = UpdateQuery.__new__(UpdateQuery)
         q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
         for arg in args:
@@ -324,11 +326,11 @@ class UpdateQuery:
 
 
 class DeleteQuery:
-    def __init__(self, model: "type[Model]") -> None:
+    def __init__(self, model: type[Model]) -> None:
         self._model = model
         self._wheres: list[Q | Condition] = []
 
-    def where(self, *args: "Q | Condition", **kwargs: typing.Any) -> "DeleteQuery":
+    def where(self, *args: Q | Condition, **kwargs: typing.Any) -> DeleteQuery:
         q = DeleteQuery.__new__(DeleteQuery)
         q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
         for arg in args:
@@ -357,14 +359,14 @@ class DeleteQuery:
         return [_row_to_model(self._model, r) for r in records]
 
 
-def _make_table(model: "type[Model]") -> Table:
+def _make_table(model: type[Model]) -> Table:
     schema = getattr(model, "__schema__", None)
     return Table(model.__table_name__, schema=schema)
 
 
 def _infer_join_on(
-    source_model: "type[Model]",
-    target_model: "type[Model]",
+    source_model: type[Model],
+    target_model: type[Model],
     source_table: Table,
     target_table: Table,
 ) -> pypika.Criterion | None:
@@ -376,7 +378,7 @@ def _infer_join_on(
     return None
 
 
-def _row_to_model(model: "type[Model]", record: typing.Any) -> typing.Any:
+def _row_to_model(model: type[Model], record: typing.Any) -> typing.Any:
     import msgspec
 
     data = dict(record.items())

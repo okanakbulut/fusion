@@ -13,7 +13,6 @@ from fusion.orm.constraints import ForeignKey
 from fusion.orm.fields import db_now, db_uuid, field
 from fusion.orm.model import Model
 
-
 # ---------------------------------------------------------------------------
 # Shared models
 # ---------------------------------------------------------------------------
@@ -330,7 +329,7 @@ def test_delete_with_where():
 
 
 def test_delete_params():
-    sql, params = Post.delete().where(id=42).build()
+    _, params = Post.delete().where(id=42).build()
     assert params == [42]
 
 

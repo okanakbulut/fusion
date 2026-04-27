@@ -4,7 +4,7 @@ from .column import Condition
 
 
 class Q:
-    def __init__(self, *conditions: "Condition | Q", **kwargs: typing.Any) -> None:
+    def __init__(self, *conditions: Condition | Q, **kwargs: typing.Any) -> None:
         self._conditions: list[Condition] = []
         self.children: list[Q] = []
         self.op: str = "and"
@@ -25,19 +25,19 @@ class Q:
     def conditions(self) -> list[Condition]:
         return self._conditions
 
-    def __and__(self, other: "Q") -> "Q":
+    def __and__(self, other: Q) -> Q:
         q = Q()
         q.op = "and"
         q.children = [self, other]
         return q
 
-    def __or__(self, other: "Q") -> "Q":
+    def __or__(self, other: Q) -> Q:
         q = Q()
         q.op = "or"
         q.children = [self, other]
         return q
 
-    def __invert__(self) -> "Q":
+    def __invert__(self) -> Q:
         q = Q()
         q.op = "not"
         q.children = [self]

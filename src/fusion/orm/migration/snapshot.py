@@ -11,7 +11,7 @@ _PY_TO_PG: dict[type, str] = {
 }
 
 
-def _resolve_pg_type(model: "type[Model]", field_name: str) -> str:
+def _resolve_pg_type(model: type[Model], field_name: str) -> str:
     import types
 
     from fusion.orm.fields import DBField
@@ -42,7 +42,7 @@ def _resolve_pg_type(model: "type[Model]", field_name: str) -> str:
     return _PY_TO_PG.get(annotation, "TEXT")
 
 
-def _is_nullable(model: "type[Model]", field_name: str) -> bool:
+def _is_nullable(model: type[Model], field_name: str) -> bool:
     import sys
     import types
 
@@ -63,7 +63,7 @@ def _is_nullable(model: "type[Model]", field_name: str) -> bool:
     return False
 
 
-def _field_default(model: "type[Model]", field_name: str) -> str | None:
+def _field_default(model: type[Model], field_name: str) -> str | None:
     from fusion.orm.fields import DBField, _DbNow, _DbUuid
 
     f = model.__fields__.get(field_name)
@@ -76,7 +76,7 @@ def _field_default(model: "type[Model]", field_name: str) -> str | None:
     return None
 
 
-def serialize(models: "list[type[Model]]") -> dict[str, typing.Any]:
+def serialize(models: list[type[Model]]) -> dict[str, typing.Any]:
     from fusion.orm.constraints import ForeignKey, Index, UniqueConstraint
 
     tables: dict[str, typing.Any] = {}

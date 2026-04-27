@@ -65,22 +65,22 @@ class Model(Object, metaclass=MetaModel):
     __db_indexes__: typing.ClassVar[list[typing.Any]]
 
     @classmethod
-    def select(cls, *columns: str) -> "SelectQuery":
+    def select(cls, *columns: str) -> SelectQuery:
         from .query import SelectQuery
         return SelectQuery(cls, columns)
 
     @classmethod
-    def insert(cls) -> "InsertQuery":
+    def insert(cls) -> InsertQuery:
         from .query import InsertQuery
         return InsertQuery(cls)
 
     @classmethod
-    def update(cls) -> "UpdateQuery":
+    def update(cls) -> UpdateQuery:
         from .query import UpdateQuery
         return UpdateQuery(cls)
 
     @classmethod
-    def delete(cls) -> "DeleteQuery":
+    def delete(cls) -> DeleteQuery:
         from .query import DeleteQuery
         return DeleteQuery(cls)
 

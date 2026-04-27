@@ -4,8 +4,9 @@ These tests exercise specific edge-case paths that weren't triggered by the
 primary feature tests: error paths, empty conditions, less-common branches.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from fusion.orm.column import Column, Condition
 from fusion.orm.conditions import Q
@@ -13,7 +14,6 @@ from fusion.orm.constraints import ForeignKey
 from fusion.orm.expressions import Exp, cte, union
 from fusion.orm.fields import field
 from fusion.orm.model import Model
-
 
 # ---------------------------------------------------------------------------
 # Shared models
@@ -111,19 +111,19 @@ def test_unknown_lookup_raises():
 
 def test_q_with_no_conditions_produces_no_where():
     empty_q = Q()
-    sql, params = Post.select().where(empty_q).build()
+    sql, _ = Post.select().where(empty_q).build()
     assert "WHERE" not in sql
 
 
 def test_update_with_empty_q_produces_no_where():
     empty_q = Q()
-    sql, params = Post.update().set(title="x").where(empty_q).build()
+    sql, _ = Post.update().set(title="x").where(empty_q).build()
     assert "WHERE" not in sql
 
 
 def test_delete_with_empty_q_produces_no_where():
     empty_q = Q()
-    sql, params = Post.delete().where(empty_q).build()
+    sql, _ = Post.delete().where(empty_q).build()
     assert "WHERE" not in sql
 
 
@@ -149,7 +149,7 @@ def test_join_without_fk_produces_join_without_on():
         id: int | None = None
         name: str
 
-    sql, params = Post.select().join(Tag).build()
+    sql, _ = Post.select().join(Tag).build()
     assert "JOIN" in sql
     # No ForeignKey declared, so no ON clause — pypika emits cross join style
     assert "tags" in sql
@@ -179,7 +179,7 @@ def test_exists_invert():
 
 
 def test_update_where_with_q_positional():
-    sql, params = Post.update().set(title="x").where(Q(user_id=1)).build()
+    sql, _ = Post.update().set(title="x").where(Q(user_id=1)).build()
     assert "user_id" in sql
 
 
@@ -189,7 +189,7 @@ def test_update_where_with_q_positional():
 
 
 def test_delete_where_with_q_positional():
-    sql, params = Post.delete().where(Q(user_id=1)).build()
+    sql, _ = Post.delete().where(Q(user_id=1)).build()
     assert "user_id" in sql
 
 
@@ -199,8 +199,9 @@ def test_delete_where_with_q_positional():
 
 
 def test_infer_join_on_returns_none_for_no_fk():
-    from fusion.orm.query import _infer_join_on
     from pypika import Table
+
+    from fusion.orm.query import _infer_join_on
 
     source = Table("posts")
     target = Table("users")

@@ -13,22 +13,22 @@ class Column:
         self.name = name
         self.table = table
 
-    def __eq__(self, other: object) -> "Condition":  # type: ignore[override]
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
         return Condition(column=self.name, lookup="eq", value=other)
 
-    def __ne__(self, other: object) -> "Condition":  # type: ignore[override]
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
         return Condition(column=self.name, lookup="ne", value=other)
 
-    def __gt__(self, other: object) -> "Condition":
+    def __gt__(self, other: object) -> Condition:
         return Condition(column=self.name, lookup="gt", value=other)
 
-    def __ge__(self, other: object) -> "Condition":
+    def __ge__(self, other: object) -> Condition:
         return Condition(column=self.name, lookup="gte", value=other)
 
-    def __lt__(self, other: object) -> "Condition":
+    def __lt__(self, other: object) -> Condition:
         return Condition(column=self.name, lookup="lt", value=other)
 
-    def __le__(self, other: object) -> "Condition":
+    def __le__(self, other: object) -> Condition:
         return Condition(column=self.name, lookup="lte", value=other)
 
     def __hash__(self) -> int:

@@ -3,7 +3,6 @@
 from fusion.orm.column import Condition
 from fusion.orm.conditions import Q
 
-
 # ---------------------------------------------------------------------------
 # Q construction from kwargs
 # ---------------------------------------------------------------------------
@@ -27,7 +26,7 @@ def test_q_from_double_underscore_lookup():
 
 
 def test_q_all_supported_lookups(lookup):
-    col, suffix = lookup
+    _col, suffix = lookup
     q = Q(**{f"field__{suffix}": "x"})
     assert q.conditions[0].lookup == suffix
 

@@ -2,7 +2,6 @@
 
 from fusion.orm.constraints import ForeignKey, Index, UniqueConstraint
 
-
 # ---------------------------------------------------------------------------
 # UniqueConstraint
 # ---------------------------------------------------------------------------

@@ -4,7 +4,6 @@ import pytest
 
 from fusion.orm.migration.apply import BlockedOperationError, to_ddl
 
-
 # ---------------------------------------------------------------------------
 # CREATE TABLE
 # ---------------------------------------------------------------------------
@@ -99,7 +98,7 @@ def test_add_not_null_column_without_default_raises():
         "nullable": False,
         "default": None,
     }
-    with pytest.raises(BlockedOperationError, match="NOT NULL.*default"):
+    with pytest.raises(BlockedOperationError, match=r"NOT NULL.*default"):
         to_ddl([change])
 
 

@@ -1,6 +1,6 @@
 import typing
 
-from fusion.object import Field, NODEFAULT
+from fusion.object import NODEFAULT, Field
 
 T = typing.TypeVar("T")
 

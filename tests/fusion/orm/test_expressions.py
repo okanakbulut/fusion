@@ -30,12 +30,12 @@ def test_exp_stores_sql():
 
 
 def test_exp_appears_in_update_set():
-    sql, params = Post.update().set(user_id=Exp("user_id + 1")).where(id=1).build()
+    sql, _ = Post.update().set(user_id=Exp("user_id + 1")).where(id=1).build()
     assert "user_id + 1" in sql
 
 
 def test_exp_in_where_clause():
-    sql, params = Post.select().where_raw(Exp('"meta" @> \'{"active": true}\'')).build()
+    sql, _ = Post.select().where_raw(Exp('"meta" @> \'{"active": true}\'')).build()
     assert "@>" in sql
 
 
@@ -61,7 +61,7 @@ def test_union_all_includes_all_keyword():
         Post.select("id", "title").where(user_id=2),
         all=True,
     )
-    sql, params = q.build()
+    sql, _ = q.build()
     assert "UNION ALL" in sql
 
 
@@ -70,7 +70,7 @@ def test_union_deduplicates_by_default():
         Post.select("id").where(status="a"),
         Post.select("id").where(status="b"),
     )
-    sql, params = q.build()
+    sql, _ = q.build()
     assert "UNION ALL" not in sql
     assert "UNION" in sql
 
@@ -85,7 +85,7 @@ def test_cte_builds_with_clause():
         main=Post.select("id", "title").where(status="recent"),
         recent=Post.select().where(created_at__is_not_null=True),
     )
-    sql, params = q.build()
+    sql, _ = q.build()
     assert "WITH" in sql
     assert "recent" in sql
 
@@ -96,7 +96,7 @@ def test_cte_multiple_named_ctes():
         cte1=Post.select().where(user_id=1),
         cte2=Post.select().where(user_id=2),
     )
-    sql, params = q.build()
+    sql, _ = q.build()
     assert "cte1" in sql
     assert "cte2" in sql
 
@@ -115,6 +115,6 @@ def test_recursive_cte_includes_recursive_keyword():
             all=True,
         ),
     )
-    sql, params = q.build()
+    sql, _ = q.build()
     assert "RECURSIVE" in sql
     assert "tree" in sql

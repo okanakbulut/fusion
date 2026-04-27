@@ -15,7 +15,9 @@ def diff(
     # Added tables
     for table_name, table_def in after_tables.items():
         if table_name not in before_tables:
-            changes.append({"op": "create_table", "table": table_name, "columns": table_def["columns"]})
+            changes.append(
+                {"op": "create_table", "table": table_name, "columns": table_def["columns"]}
+            )
 
     # Dropped tables
     for table_name in before_tables:
@@ -58,7 +60,9 @@ def diff(
         after_constraints = after_def.get("constraints", [])
         for constraint in after_constraints:
             if constraint not in before_constraints:
-                changes.append({"op": "add_constraint", "table": table_name, "constraint": constraint})
+                changes.append(
+                    {"op": "add_constraint", "table": table_name, "constraint": constraint}
+                )
 
         # Added indexes
         before_indexes = before_def.get("indexes", [])
