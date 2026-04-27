@@ -370,9 +370,7 @@ def _build_explicit_on(
 ) -> pypika.Criterion | None:
     if on_arg is None:
         return None
-    pairs: list[tuple[typing.Any, typing.Any]] = (
-        on_arg if isinstance(on_arg, list) else [on_arg]
-    )
+    pairs: list[tuple[typing.Any, typing.Any]] = on_arg if isinstance(on_arg, list) else [on_arg]
     criterion: pypika.Criterion | None = None
     for left_col, right_col in pairs:
         pair_criterion = source_table[left_col.name] == target_table[right_col.name]

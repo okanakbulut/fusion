@@ -263,9 +263,9 @@ def test_select_join_explicit_on_overrides_fk():
 
 
 def test_select_join_explicit_on_multi_pair():
-    sql, params = Post.select().join(
-        User, on=[(Post.user_id, User.id), (Post.title, User.username)]
-    ).build()
+    sql, params = (
+        Post.select().join(User, on=[(Post.user_id, User.id), (Post.title, User.username)]).build()
+    )
     assert (
         sql
         == 'SELECT * FROM "posts" JOIN "users" ON "posts"."user_id"="users"."id" AND "posts"."title"="users"."username"'

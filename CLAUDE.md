@@ -16,9 +16,10 @@ uv sync --extra dev          # install all deps
 uv run pytest                # tests + doctests + coverage
 uv run pytest --cov=src/fusion --cov-report=term-missing  # with missing lines
 
-.venv/bin/python -m ruff check src/   # lint
-.venv/bin/python -m ruff format src/  # format
-.venv/bin/python -m pyright src/      # type-check
+.venv/bin/python -m ruff check src/                  # lint
+.venv/bin/python -m ruff format src/ tests/          # format (auto-fix)
+.venv/bin/python -m ruff format --check src/ tests/  # format (check only, what CI runs)
+.venv/bin/python -m pyright src/                     # type-check
 ```
 
 ## Before pushing to GitHub
