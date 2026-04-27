@@ -15,6 +15,8 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
 _SENTINEL_TYPES = (_DbNow, _DbUuid)
 
+_OnArg = tuple[typing.Any, typing.Any] | list[tuple[typing.Any, typing.Any]] | None
+
 _JOIN_METHODS = {
     "inner": "join",
     "left": "left_join",
@@ -108,7 +110,7 @@ class SelectQuery:
         self._columns = columns
         self._wheres: list[Q | Condition] = []
         self._raw_wheres: list[str] = []
-        self._joins: list[tuple[type, dict[str, str] | None, str]] = []
+        self._joins: list[tuple[type, _OnArg, str]] = []
         self._order: list[tuple[str, bool]] = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
@@ -131,9 +133,7 @@ class SelectQuery:
             q._raw_wheres.append(exp.sql)
         return q
 
-    def join(
-        self, model: type[Model], *, on: dict[str, str] | None = None, how: str = "inner"
-    ) -> SelectQuery:
+    def join(self, model: type[Model], *, on: _OnArg = None, how: str = "inner") -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__, "_joins": list(self._joins)}
         q._joins.append((model, on, how))
@@ -166,9 +166,11 @@ class SelectQuery:
         else:
             q = PostgreSQLQuery.from_(table).select("*")
 
-        for join_model, _on, how in self._joins:
+        for join_model, on_arg, how in self._joins:
             join_table = _make_table(join_model)
-            on_clause = _infer_join_on(self._model, join_model, table, join_table)
+            on_clause = _build_explicit_on(on_arg, table, join_table) or _infer_join_on(
+                self._model, join_model, table, join_table
+            )
             join_fn = getattr(q, _JOIN_METHODS.get(how, "join"))
             if on_clause is not None:
                 q = join_fn(join_table).on(on_clause)
@@ -359,6 +361,21 @@ class DeleteQuery:
 def _make_table(model: type[Model]) -> Table:
     schema = getattr(model, "__schema__", None)
     return Table(model.__table_name__, schema=schema)
+
+
+def _build_explicit_on(
+    on_arg: _OnArg,
+    source_table: Table,
+    target_table: Table,
+) -> pypika.Criterion | None:
+    if on_arg is None:
+        return None
+    pairs: list[tuple[typing.Any, typing.Any]] = on_arg if isinstance(on_arg, list) else [on_arg]
+    criterion: pypika.Criterion | None = None
+    for left_col, right_col in pairs:
+        pair_criterion = source_table[left_col.name] == target_table[right_col.name]
+        criterion = pair_criterion if criterion is None else criterion & pair_criterion
+    return criterion
 
 
 def _infer_join_on(

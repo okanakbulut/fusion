@@ -1,5 +1,5 @@
 default_language_version:
-  python: "3.12"
+  python: "3.14"
 repos:
   - hooks:
       - args:
@@ -26,12 +26,24 @@ repos:
         id: ruff
       - id: ruff-format
     repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.8
+    rev: v0.15.11
   - repo: local
     hooks:
+      - id: ruff-format-check
+        name: ruff-format-check
+        entry: ruff format --check src/ tests/
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: pyright
+        name: pyright
+        entry: pyright src/
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: pytest-check
         name: pytest-check
-        entry: pytest --cov
+        entry: pytest --cov=src/fusion --cov-report=term-missing
         language: system
         pass_filenames: false
         always_run: true

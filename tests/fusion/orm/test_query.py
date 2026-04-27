@@ -250,6 +250,35 @@ def test_select_join_with_where():
     assert params == [1]
 
 
+def test_select_join_explicit_on_single_pair_no_fk():
+    sql, params = Post.select().join(User, on=(Post.user_id, User.id)).build()
+    assert sql == 'SELECT * FROM "posts" JOIN "users" ON "posts"."user_id"="users"."id"'
+    assert params == []
+
+
+def test_select_join_explicit_on_overrides_fk():
+    sql, params = Article.select().join(Author, on=(Article.title, Author.email)).build()
+    assert sql == 'SELECT * FROM "articles" JOIN "authors" ON "articles"."title"="authors"."email"'
+    assert params == []
+
+
+def test_select_join_explicit_on_multi_pair():
+    sql, params = (
+        Post.select().join(User, on=[(Post.user_id, User.id), (Post.title, User.username)]).build()
+    )
+    assert (
+        sql
+        == 'SELECT * FROM "posts" JOIN "users" ON "posts"."user_id"="users"."id" AND "posts"."title"="users"."username"'
+    )
+    assert params == []
+
+
+def test_select_join_explicit_on_left_join():
+    sql, params = Post.select().join(User, on=(Post.user_id, User.id), how="left").build()
+    assert sql == 'SELECT * FROM "posts" LEFT JOIN "users" ON "posts"."user_id"="users"."id"'
+    assert params == []
+
+
 # ---------------------------------------------------------------------------
 # SELECT — schema-qualified table
 # ---------------------------------------------------------------------------
