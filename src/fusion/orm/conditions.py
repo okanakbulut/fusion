@@ -2,6 +2,23 @@ import typing
 
 from .column import Condition
 
+KNOWN_LOOKUPS: frozenset[str] = frozenset(
+    {
+        "eq",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "like",
+        "ilike",
+        "in",
+        "is_null",
+        "is_not_null",
+        "startswith",
+    }
+)
+
 
 class Q:
     def __init__(self, *conditions: Condition | Q, **kwargs: typing.Any) -> None:
@@ -16,10 +33,20 @@ class Q:
                 self.children.append(arg)
 
         for key, value in kwargs.items():
-            parts = key.split("__", 1)
-            column = parts[0]
-            lookup = parts[1] if len(parts) > 1 else "eq"
-            self._conditions.append(Condition(column=column, lookup=lookup, value=value))
+            parts = key.split("__")
+            if len(parts) > 1 and parts[-1] in KNOWN_LOOKUPS:
+                lookup = parts[-1]
+                rest = parts[:-1]
+            else:
+                lookup = "eq"
+                rest = parts
+
+            if len(rest) == 1:
+                self._conditions.append(Condition(column=rest[0], lookup=lookup, value=value))
+            else:
+                self._conditions.append(
+                    Condition(table_alias=rest[0], column=rest[1], lookup=lookup, value=value)
+                )
 
     @property
     def conditions(self) -> list[Condition]:

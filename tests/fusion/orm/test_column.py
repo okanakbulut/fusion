@@ -68,3 +68,18 @@ def test_condition_stores_all_attrs():
     assert cond.column == "email"
     assert cond.lookup == "eq"
     assert cond.value == "a@b.com"
+
+
+# ---------------------------------------------------------------------------
+# Hash
+# ---------------------------------------------------------------------------
+
+
+def test_column_is_hashable():
+    col = Column("email", table="users")
+    assert hash(col) == hash(("email", "users"))
+
+
+def test_column_can_be_used_in_set():
+    cols = {Column("a"), Column("b"), Column("a")}
+    assert len(cols) == 2

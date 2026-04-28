@@ -494,6 +494,128 @@ Explicit `on` also overrides FK inference when you need a non-standard join colu
 
 ```
 
+### Relationships and prefetch
+
+Declare a relationship field by annotating a model field with another `Model` type. The metaclass automatically injects the corresponding FK column (`author_id` for `author: Author | None`) and registers a `ForeignKey` constraint:
+
+```python
+>>> class Author(Model):
+...     id: int | None = None
+...     name: str
+
+>>> class Article(Model):
+...     id: int | None = None
+...     title: str
+...     author: Author | None = None   # injects author_id: int | None = None
+
+```
+
+The FK column is available at construction time:
+
+```python
+>>> a = Article(title="hello", author_id=1)
+>>> a.author_id
+1
+>>> a.author is None
+True
+
+```
+
+The relationship field is excluded from `INSERT` — only the FK column is written:
+
+```python
+>>> sql, params = Article.insert().values(Article(title="hello", author_id=1)).build()
+>>> sql
+'INSERT INTO "articles" ("title","author_id") VALUES ($1,$2) RETURNING *'
+
+```
+
+Required (non-optional) relationships work the same way but the FK column is non-nullable:
+
+```python
+>>> class RequiredArticle(Model):
+...     id: int | None = None
+...     title: str
+...     author: Author   # required → author_id: int (required, not Optional)
+
+```
+
+#### .prefetch()
+
+`.prefetch(*models)` generates a `LEFT JOIN` for each relationship and instructs `.fetch()` to hydrate the related objects in a single query:
+
+```python
+>>> sql, _ = Article.select().prefetch(Author).build()
+>>> sql
+'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+
+```
+
+After `.fetch(conn)` each returned `Article` has `.author` populated. When the LEFT JOIN finds no matching row, `.author` stays `None`:
+
+```python
+# async with pool.acquire() as conn:
+#     articles = await Article.select().prefetch(Author).fetch(conn)
+#     articles[0].author        # Author instance, or None if no match
+#     articles[0].author.name   # "Alice"
+```
+
+When the related model uses a custom table name via `__table__`, `.prefetch()` uses that name in the JOIN automatically:
+
+```python
+>>> class LegacyUser(Model):
+...     __table__ = "tbl_users"
+...     id: int | None = None
+...     name: str
+
+>>> class Comment(Model):
+...     id: int | None = None
+...     body: str
+...     author: LegacyUser | None = None
+
+>>> sql, _ = Comment.select().prefetch(LegacyUser).build()
+>>> sql
+'SELECT * FROM "comments" LEFT JOIN "tbl_users" ON "comments"."author_id"="tbl_users"."id"'
+
+```
+
+Multiple relationships are prefetched in a single query:
+
+```python
+>>> class Tag(Model):
+...     id: int | None = None
+...     name: str
+
+>>> class TaggedArticle(Model):
+...     id: int | None = None
+...     title: str
+...     author: Author | None = None
+...     tag: Tag | None = None
+
+>>> sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
+>>> sql
+'SELECT * FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
+
+```
+
+`.prefetch()` composes with `.where()`, `.order_by()`, `.limit()`, and `.offset()` like any other query modifier.
+
+#### replace() and relationship sync
+
+`Model.replace()` keeps the FK column and the relationship field in sync:
+
+```python
+# Setting the relationship object syncs the FK column:
+# updated = article.replace(author=Author(id=42, name="Alice"))
+# updated.author_id   # 42
+
+# Setting the FK column directly clears the stale relationship field:
+# updated = article.replace(author_id=99)
+# updated.author      # None
+```
+
+---
+
 ### INSERT
 
 `INSERT` always appends `RETURNING *`. The database fills in `id` and any DB-sentinel defaults; the returned rows are fully populated model instances.

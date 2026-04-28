@@ -66,7 +66,7 @@ class RouteNode(msgspec.Struct):
         /            \
     {id}            {item_id}
 (GET -> GetUserHandler)   (GET -> GetItemHandler)
-    
+
     """
 
     routes: dict[Method, Route] = msgspec.field(default_factory=lambda: dict())
