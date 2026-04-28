@@ -71,6 +71,47 @@ class TaggedArticle(Model):
     tag: Tag | None = None
 
 
+# Models for testing that a prefetched model's own relationship fields are excluded
+class Country(Model):
+    id: int | None = None
+    name: str
+
+
+class City(Model):
+    id: int | None = None
+    name: str
+    country: Country | None = None
+
+
+class Place(Model):
+    id: int | None = None
+    title: str
+    city: City | None = None
+
+
+def test_prefetch_model_own_rel_field_excluded_from_select():
+    """Prefetching a model that itself has a relationship must not emit the rel field as a column."""
+    sql, _ = Place.select().prefetch(City).build()
+    assert sql == (
+        'SELECT "places"."id","places"."title","places"."city_id",'
+        '"cities"."id" "city__id","cities"."name" "city__name","cities"."country_id" "city__country_id"'
+        ' FROM "places" LEFT JOIN "cities" ON "places"."city_id"="cities"."id"'
+    )
+
+
+def test_join_prefetch_where_on_joined_fk_column():
+    """WHERE on an FK column of the joined model (e.g. workspace__org_id) must resolve correctly."""
+    sql, params = Place.select().join(City).prefetch(City).where(city__country_id=7).build()
+    assert sql == (
+        'SELECT "places"."id","places"."title","places"."city_id",'
+        '"cities"."id" "city__id","cities"."name" "city__name","cities"."country_id" "city__country_id"'
+        ' FROM "places"'
+        ' JOIN "cities" ON "places"."city_id"="cities"."id"'
+        ' WHERE "cities"."country_id"=$1'
+    )
+    assert params == [7]
+
+
 def test_multi_prefetch_generates_two_joins():
     sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
     assert sql == (

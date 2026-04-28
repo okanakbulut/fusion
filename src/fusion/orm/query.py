@@ -230,8 +230,10 @@ class SelectQuery:
             if prefetch_model not in already_joined:
                 on_clause = table[fk_constraint.column] == join_table[fk_constraint.target_column]
                 q = q.left_join(join_table).on(on_clause)
+            prefetch_rel_fields = getattr(prefetch_model, "__relationship_fields__", frozenset())
             for sf in msgspec.structs.fields(prefetch_model):  # type: ignore[arg-type]
-                q = q.select(join_table[sf.name].as_(f"{rel_field}__{sf.name}"))
+                if sf.name not in prefetch_rel_fields:
+                    q = q.select(join_table[sf.name].as_(f"{rel_field}__{sf.name}"))
 
         for where_arg in self._wheres:
             criterion = _where_arg_to_criterion(where_arg, table, params, alias_map)
