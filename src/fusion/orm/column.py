@@ -2,10 +2,13 @@ import typing
 
 
 class Condition:
-    def __init__(self, *, column: str, lookup: str, value: typing.Any) -> None:
+    def __init__(
+        self, *, column: str, lookup: str, value: typing.Any, table_alias: str | None = None
+    ) -> None:
         self.column = column
         self.lookup = lookup
         self.value = value
+        self.table_alias = table_alias
 
 
 class Column:

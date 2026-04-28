@@ -94,13 +94,13 @@ def test_q_with_q_positional_arg():
 
 
 # ---------------------------------------------------------------------------
-# query.py — unknown lookup raises ValueError
+# query.py — unknown join alias raises ValueError
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_lookup_raises():
-    with pytest.raises(ValueError, match="Unknown lookup"):
-        Post.select().where(id__badop=5).build()
+def test_unknown_alias_raises():
+    with pytest.raises(ValueError, match="Unknown join alias"):
+        Post.select().where(ghost__col=5).build()
 
 
 # ---------------------------------------------------------------------------

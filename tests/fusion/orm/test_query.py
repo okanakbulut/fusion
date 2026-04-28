@@ -140,6 +140,12 @@ def test_select_where_in_lookup():
     assert params == [[1, 2, 3]]
 
 
+def test_select_where_startswith_lookup():
+    sql, params = Post.select().where(title__startswith="Hello").build()
+    assert sql == 'SELECT * FROM "posts" WHERE "title" LIKE $1'
+    assert params == ["Hello%"]
+
+
 def test_select_order_by_asc():
     sql, params = Post.select().order_by("created_at").build()
     assert sql == 'SELECT * FROM "posts" ORDER BY "created_at" ASC'
@@ -248,6 +254,78 @@ def test_select_join_with_where():
         == 'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id" WHERE "articles"."author_id"=$1'
     )
     assert params == [1]
+
+
+# ---------------------------------------------------------------------------
+# SELECT — JOIN with alias-based WHERE filtering
+# ---------------------------------------------------------------------------
+
+
+def test_select_join_auto_alias_where():
+    sql, params = Article.select().join(Author).where(author__email="a@b.com").build()
+    assert sql == (
+        'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "authors"."email"=$1'
+    )
+    assert params == ["a@b.com"]
+
+
+def test_select_join_explicit_alias_where():
+    sql, params = Article.select().join(a=Author).where(a__email="a@b.com").build()
+    assert sql == (
+        'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "authors"."email"=$1'
+    )
+    assert params == ["a@b.com"]
+
+
+def test_select_join_alias_where_with_lookup():
+    sql, params = Article.select().join(Author).where(author__email__startswith="john").build()
+    assert sql == (
+        'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "authors"."email" LIKE $1'
+    )
+    assert params == ["john%"]
+
+
+def test_select_join_q_alias():
+    sql, params = Article.select().join(Author).where(Q(author__email="a@b.com")).build()
+    assert sql == (
+        'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "authors"."email"=$1'
+    )
+    assert params == ["a@b.com"]
+
+
+def test_select_join_q_alias_combined():
+    sql, params = (
+        Article.select().join(Author).where(Q(author__email="a@b.com") | Q(author_id=5)).build()
+    )
+    assert sql == (
+        'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "authors"."email"=$1 OR "articles"."author_id"=$2'
+    )
+    assert params == ["a@b.com", 5]
+
+
+def test_select_join_explicit_alias_with_how():
+    sql, params = Article.select().join(a=Author, how="left").where(a__email="a@b.com").build()
+    assert sql == (
+        'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "authors"."email"=$1'
+    )
+    assert params == ["a@b.com"]
+
+
+def test_select_join_alias_where_source_and_joined():
+    sql, params = (
+        Article.select().join(Author).where(title="hello").where(author__email="a@b.com").build()
+    )
+    assert sql == (
+        'SELECT * FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
+        ' WHERE "articles"."title"=$1 AND "authors"."email"=$2'
+    )
+    assert params == ["hello", "a@b.com"]
 
 
 def test_select_join_explicit_on_single_pair_no_fk():

@@ -36,6 +36,7 @@ LOOKUP_OPS = {
     "in": lambda col, p: col.isin(p),
     "is_null": lambda col, _p: col.isnull(),
     "is_not_null": lambda col, _p: col.isnotnull(),
+    "startswith": lambda col, p: col.like(p),
 }
 
 
@@ -43,10 +44,16 @@ def _build_criterion(
     conditions: list[Condition],
     table: Table,
     params: list[typing.Any],
+    alias_map: dict[str, Table] | None = None,
 ) -> pypika.Criterion | None:
     criteria: list[pypika.Criterion] = []
     for cond in conditions:
-        col = table[cond.column]
+        if cond.table_alias:
+            if not alias_map or cond.table_alias not in alias_map:
+                raise ValueError(f"Unknown join alias: {cond.table_alias!r}")
+            col = alias_map[cond.table_alias][cond.column]
+        else:
+            col = table[cond.column]
         op = LOOKUP_OPS.get(cond.lookup)
         if op is None:
             raise ValueError(f"Unknown lookup: {cond.lookup!r}")
@@ -58,6 +65,9 @@ def _build_criterion(
             if cond.lookup == "in":
                 params.append(list(cond.value))
                 criteria.append(col.isin(Parameter(f"${idx}")))
+            elif cond.lookup == "startswith":
+                params.append(f"{cond.value}%")
+                criteria.append(op(col, Parameter(f"${idx}")))
             else:
                 params.append(cond.value)
                 criteria.append(op(col, Parameter(f"${idx}")))
@@ -74,9 +84,10 @@ def _q_to_criterion(
     q: Q,
     table: Table,
     params: list[typing.Any],
+    alias_map: dict[str, Table] | None = None,
 ) -> pypika.Criterion | None:
     if q.children:
-        child_criteria = [_q_to_criterion(c, table, params) for c in q.children]
+        child_criteria = [_q_to_criterion(c, table, params, alias_map) for c in q.children]
         child_criteria = [c for c in child_criteria if c is not None]
         if not child_criteria:
             return None
@@ -89,18 +100,19 @@ def _q_to_criterion(
             else:
                 result = result & c
         return result
-    return _build_criterion(q.conditions, table, params)
+    return _build_criterion(q.conditions, table, params, alias_map)
 
 
 def _where_arg_to_criterion(
     arg: Q | Condition,
     table: Table,
     params: list[typing.Any],
+    alias_map: dict[str, Table] | None = None,
 ) -> pypika.Criterion | None:
     if isinstance(arg, Q):
-        return _q_to_criterion(arg, table, params)
+        return _q_to_criterion(arg, table, params, alias_map)
     if isinstance(arg, Condition):
-        return _build_criterion([arg], table, params)
+        return _build_criterion([arg], table, params, alias_map)
     return None
 
 
@@ -110,7 +122,7 @@ class SelectQuery:
         self._columns = columns
         self._wheres: list[Q | Condition] = []
         self._raw_wheres: list[str] = []
-        self._joins: list[tuple[type, _OnArg, str]] = []
+        self._joins: list[tuple[type, str, _OnArg, str]] = []
         self._order: list[tuple[str, bool]] = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
@@ -133,10 +145,24 @@ class SelectQuery:
             q._raw_wheres.append(exp.sql)
         return q
 
-    def join(self, model: type[Model], *, on: _OnArg = None, how: str = "inner") -> SelectQuery:
+    def join(
+        self,
+        model: type[Model] | None = None,
+        *,
+        on: _OnArg = None,
+        how: str = "inner",
+        **alias_kwargs: type[Model],
+    ) -> SelectQuery:
+        if model is not None:
+            alias = model.__name__.lower()
+            target: type[Model] = model
+        elif len(alias_kwargs) == 1:
+            alias, target = next(iter(alias_kwargs.items()))
+        else:
+            raise ValueError("join() requires a positional model or exactly one alias kwarg")
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__, "_joins": list(self._joins)}
-        q._joins.append((model, on, how))
+        q._joins.append((target, alias, on, how))
         return q
 
     def order_by(self, column: str, *, desc: bool = False) -> SelectQuery:
@@ -166,8 +192,10 @@ class SelectQuery:
         else:
             q = PostgreSQLQuery.from_(table).select("*")
 
-        for join_model, on_arg, how in self._joins:
+        alias_map: dict[str, Table] = {}
+        for join_model, alias, on_arg, how in self._joins:
             join_table = _make_table(join_model)
+            alias_map[alias] = join_table
             on_clause = _build_explicit_on(on_arg, table, join_table) or _infer_join_on(
                 self._model, join_model, table, join_table
             )
@@ -178,7 +206,7 @@ class SelectQuery:
                 q = join_fn(join_table).on(LiteralValue("true"))  # type: ignore[arg-type]
 
         for where_arg in self._wheres:
-            criterion = _where_arg_to_criterion(where_arg, table, params)
+            criterion = _where_arg_to_criterion(where_arg, table, params, alias_map)
             if criterion is not None:
                 q = q.where(criterion)
 
