@@ -1,3 +1,9 @@
+## v0.8.4 (2026-04-28)
+
+### Fix
+
+- filterin on joined column
+
 ## v0.8.3 (2026-04-28)
 
 ### Feat
