@@ -1,3 +1,10 @@
+## v0.8.2 (2026-04-28)
+
+### Feat
+
+- add prefecth support for relationships
+- add alias-based join filtering and startswith lookup
+
 ## v0.8.1 (2026-04-27)
 
 ### Feat
