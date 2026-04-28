@@ -90,6 +90,13 @@ def test_q_leaf_has_no_children():
     assert q.op == "and"
 
 
+def test_q_with_q_positional_arg():
+    inner = Q(user_id=1)
+    outer = Q(inner)
+    assert len(outer.children) == 1
+    assert outer.children[0] is inner
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

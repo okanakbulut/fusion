@@ -1,5 +1,9 @@
 """Tests for fusion.orm.expressions — Exp, union(), cte(), recursive_cte()."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from fusion.orm.expressions import Exp, cte, recursive_cte, union
 from fusion.orm.fields import field
 from fusion.orm.model import Model
@@ -118,3 +122,40 @@ def test_recursive_cte_includes_recursive_keyword():
     sql, _ = q.build()
     assert "RECURSIVE" in sql
     assert "tree" in sql
+
+
+# ---------------------------------------------------------------------------
+# .fetch() — async connection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_union_fetch_calls_conn():
+    conn = AsyncMock()
+    record = MagicMock()
+    record.items = MagicMock(return_value=[("id", 1), ("title", "hi")])
+    conn.fetch = AsyncMock(return_value=[record])
+
+    q = union(
+        Post.select("id", "title").where(user_id=1),
+        Post.select("id", "title").where(user_id=2),
+    )
+    result = await q.fetch(conn)
+    conn.fetch.assert_called_once()
+    assert isinstance(result, list)
+
+
+@pytest.mark.asyncio
+async def test_cte_fetch_calls_conn():
+    conn = AsyncMock()
+    record = MagicMock()
+    record.items = MagicMock(return_value=[("id", 1), ("title", "hi")])
+    conn.fetch = AsyncMock(return_value=[record])
+
+    q = cte(
+        main=Post.select("id").where(user_id=1),
+        recent=Post.select().where(user_id=1),
+    )
+    result = await q.fetch(conn)
+    conn.fetch.assert_called_once()
+    assert isinstance(result, list)

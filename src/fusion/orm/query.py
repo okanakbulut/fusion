@@ -123,6 +123,7 @@ class SelectQuery:
         self._wheres: list[Q | Condition] = []
         self._raw_wheres: list[str] = []
         self._joins: list[tuple[type, str, _OnArg, str]] = []
+        self._prefetches: list[type[Model]] = []
         self._order: list[tuple[str, bool]] = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
@@ -165,6 +166,11 @@ class SelectQuery:
         q._joins.append((target, alias, on, how))
         return q
 
+    def prefetch(self, *models: type[Model]) -> SelectQuery:
+        q = SelectQuery.__new__(SelectQuery)
+        q.__dict__ = {**self.__dict__, "_prefetches": list(self._prefetches) + list(models)}
+        return q
+
     def order_by(self, column: str, *, desc: bool = False) -> SelectQuery:
         q = SelectQuery.__new__(SelectQuery)
         q.__dict__ = {**self.__dict__, "_order": list(self._order)}
@@ -184,6 +190,8 @@ class SelectQuery:
         return q
 
     def build(self) -> tuple[str, list[typing.Any]]:
+        import msgspec.structs
+
         table = _make_table(self._model)
         params: list[typing.Any] = []
 
@@ -204,6 +212,14 @@ class SelectQuery:
                 q = join_fn(join_table).on(on_clause)
             else:
                 q = join_fn(join_table).on(LiteralValue("true"))  # type: ignore[arg-type]
+
+        for prefetch_model in self._prefetches:
+            rel_field, fk_constraint = _find_prefetch_relation(self._model, prefetch_model)
+            join_table = _make_table(prefetch_model)
+            on_clause = table[fk_constraint.column] == join_table[fk_constraint.target_column]
+            q = q.left_join(join_table).on(on_clause)
+            for sf in msgspec.structs.fields(prefetch_model):  # type: ignore[arg-type]
+                q = q.select(join_table[sf.name].as_(f"{rel_field}__{sf.name}"))
 
         for where_arg in self._wheres:
             criterion = _where_arg_to_criterion(where_arg, table, params, alias_map)
@@ -234,6 +250,8 @@ class SelectQuery:
         records = await conn.fetch(sql, *params)
         if raw:
             return [dict(r.items()) for r in records]
+        if self._prefetches:
+            return [_row_to_model_with_prefetch(self._model, r, self._prefetches) for r in records]
         return [_row_to_model(self._model, r) for r in records]
 
     async def fetch_one(self, conn: typing.Any) -> typing.Any:
@@ -276,10 +294,13 @@ class InsertQuery:
         table = _make_table(self._model)
         fields = self._model.__fields__
 
+        rel_fields = getattr(self._model, "__relationship_fields__", frozenset())
         columns = [
             name
             for name, f in fields.items()
-            if name != "id" and not isinstance(f.default, _SENTINEL_TYPES)
+            if name != "id"
+            and not isinstance(f.default, _SENTINEL_TYPES)
+            and name not in rel_fields
         ]
 
         params: list[typing.Any] = []
@@ -424,4 +445,41 @@ def _row_to_model(model: type[Model], record: typing.Any) -> typing.Any:
     import msgspec
 
     data = dict(record.items())
+    return msgspec.convert(data, model)
+
+
+def _find_prefetch_relation(
+    source_model: type[Model],
+    target_model: type[Model],
+) -> tuple[str, typing.Any]:
+    from .constraints import ForeignKey
+
+    for constraint in source_model.__db_constraints__:
+        if isinstance(constraint, ForeignKey) and constraint.target is target_model:
+            rel_field = constraint.column.removesuffix("_id")
+            return rel_field, constraint
+    raise ValueError(f"No ForeignKey from {source_model.__name__} to {target_model.__name__} found")
+
+
+def _row_to_model_with_prefetch(
+    model: type[Model],
+    record: typing.Any,
+    prefetch_models: list[type[Model]],
+) -> typing.Any:
+    import msgspec
+
+    data = dict(record.items())
+    nested: dict[str, typing.Any] = {}
+
+    for prefetch_model in prefetch_models:
+        rel_field, _ = _find_prefetch_relation(model, prefetch_model)
+        prefix = f"{rel_field}__"
+        rel_data = {k[len(prefix) :]: v for k, v in data.items() if k.startswith(prefix)}
+        # Remove prefixed keys from base data
+        for k in list(rel_data):
+            data.pop(f"{prefix}{k}", None)
+        if any(v is not None for v in rel_data.values()):
+            nested[rel_field] = msgspec.convert(rel_data, prefetch_model)
+
+    data.update(nested)
     return msgspec.convert(data, model)

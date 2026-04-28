@@ -8,10 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from pypika import Table
+
+from fusion.orm.column import Condition
 from fusion.orm.conditions import Q
 from fusion.orm.constraints import ForeignKey
 from fusion.orm.fields import db_now, db_uuid, field
 from fusion.orm.model import Model
+from fusion.orm.query import ExistsExpression, _infer_join_on, _where_arg_to_criterion
 
 # ---------------------------------------------------------------------------
 # Shared models
@@ -538,3 +542,162 @@ async def test_fetch_raw_true_returns_dicts(record_conn):
     assert isinstance(result, list)
     if result:
         assert isinstance(result[0], dict)
+
+
+# ---------------------------------------------------------------------------
+# SELECT — .exists()
+# ---------------------------------------------------------------------------
+
+
+def test_exists_returns_exists_expression():
+    e = Post.select().where(user_id=1).exists()
+    assert isinstance(e, ExistsExpression)
+
+
+def test_exists_invert():
+    e = ~Post.select().where(user_id=1).exists()
+    assert isinstance(e, ExistsExpression)
+    assert e._negated is True
+
+
+# ---------------------------------------------------------------------------
+# SELECT / UPDATE / DELETE — empty Q produces no WHERE
+# ---------------------------------------------------------------------------
+
+
+def test_select_empty_q_produces_no_where():
+    sql, _ = Post.select().where(Q()).build()
+    assert sql == 'SELECT * FROM "posts"'
+
+
+def test_select_nested_empty_q_produces_no_where():
+    sql, _ = Post.select().where(Q(Q())).build()
+    assert sql == 'SELECT * FROM "posts"'
+
+
+def test_update_empty_q_produces_no_where():
+    sql, params = Post.update().set(title="x").where(Q()).build()
+    assert sql == 'UPDATE "posts" SET "title"=$1 RETURNING *'
+    assert params == ["x"]
+
+
+def test_delete_empty_q_produces_no_where():
+    sql, _ = Post.delete().where(Q()).build()
+    assert sql == 'DELETE FROM "posts" RETURNING *'
+
+
+# ---------------------------------------------------------------------------
+# UPDATE / DELETE — Q as positional arg
+# ---------------------------------------------------------------------------
+
+
+def test_update_where_with_q_positional():
+    sql, params = Post.update().set(title="x").where(Q(user_id=1)).build()
+    assert sql == 'UPDATE "posts" SET "title"=$1 WHERE "user_id"=$2 RETURNING *'
+    assert params == ["x", 1]
+
+
+def test_delete_where_with_q_positional():
+    sql, params = Post.delete().where(Q(user_id=1)).build()
+    assert sql == 'DELETE FROM "posts" WHERE "user_id"=$1 RETURNING *'
+    assert params == [1]
+
+
+# ---------------------------------------------------------------------------
+# WHERE — Condition object, where_raw no-op, unknown type
+# ---------------------------------------------------------------------------
+
+
+def test_where_with_condition_object_directly():
+    cond = Condition(column="user_id", lookup="eq", value=1)
+    sql, params = Post.select().where(cond).build()
+    assert sql == 'SELECT * FROM "posts" WHERE "user_id"=$1'
+    assert params == [1]
+
+
+def test_where_raw_with_non_exp_is_noop():
+    sql, _ = Post.select().where_raw("ignored_string").build()  # type: ignore[arg-type]
+    assert sql == 'SELECT * FROM "posts"'
+
+
+def test_where_arg_to_criterion_unknown_type():
+    result = _where_arg_to_criterion("not_a_q_or_condition", Table("posts"), [])  # type: ignore[arg-type]
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# JOIN — no FK and multiple alias kwargs error
+# ---------------------------------------------------------------------------
+
+
+def test_join_without_fk_produces_join_without_on():
+    class Tag(Model):
+        id: int | None = None
+        name: str
+
+    sql, _ = Post.select().join(Tag).build()
+    assert sql == 'SELECT * FROM "posts" JOIN "tags" ON true'
+
+
+def test_join_multiple_alias_kwargs_raises():
+    with pytest.raises(ValueError, match="positional model or exactly one alias kwarg"):
+        Post.select().join(a=User, b=Post)
+
+
+def test_infer_join_on_returns_none_for_no_fk():
+    class NoFK(Model):
+        id: int | None = None
+        name: str
+
+    source = Table("posts")
+    target = Table("users")
+    result = _infer_join_on(NoFK, User, source, target)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Error cases
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_alias_raises():
+    with pytest.raises(ValueError, match="Unknown join alias"):
+        Post.select().where(ghost__col=5).build()
+
+
+def test_unknown_lookup_raises():
+    cond = Condition(column="title", lookup="BOGUS", value="x")
+    with pytest.raises(ValueError, match="Unknown lookup"):
+        Post.select().where(cond).build()
+
+
+# ---------------------------------------------------------------------------
+# .fetch() — returns model instances
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_select_fetch_returns_model_instances():
+    conn = AsyncMock()
+    row = {"id": 1, "user_id": 1, "title": "hello", "body": None, "created_at": None}
+    record = MagicMock()
+    record.items = MagicMock(return_value=list(row.items()))
+    conn.fetch = AsyncMock(return_value=[record])
+
+    results = await Post.select().where(user_id=1).fetch(conn)
+    assert len(results) == 1
+    assert isinstance(results[0], Post)
+    assert results[0].title == "hello"
+
+
+@pytest.mark.asyncio
+async def test_select_fetch_one_returns_model_instance():
+    conn = AsyncMock()
+    row = {"id": 1, "user_id": 1, "title": "hello", "body": None, "created_at": None}
+    record = MagicMock()
+    record.items = MagicMock(return_value=list(row.items()))
+    conn.fetchrow = AsyncMock(return_value=record)
+
+    result = await Post.select().where(id=1).fetch_one(conn)
+    assert isinstance(result, Post)
+    assert result.id == 1

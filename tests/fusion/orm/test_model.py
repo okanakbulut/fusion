@@ -131,3 +131,30 @@ def test_model_is_frozen():
     u = msgspec.json.decode(b'{"id": 1, "email": "a@b.com"}', type=User)
     with pytest.raises((TypeError, AttributeError)):
         u.email = "b@c.com"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Table name derivation — edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_pluralize_y_suffix():
+    class Category(Model):
+        id: int | None = None
+        name: str
+
+    assert Category.__table_name__ == "categories"
+
+
+def test_pluralize_es_suffix():
+    class Box(Model):
+        id: int | None = None
+
+    assert Box.__table_name__ == "boxes"
+
+
+def test_class_level_non_field_access_returns_normally():
+    class Widget(Model):
+        id: int | None = None
+
+    assert Widget.__table_name__ == "widgets"
