@@ -80,6 +80,9 @@ addopts = [
     "--tb=long",
 ]
 testpaths = ["tests", "src/fusion", "docs"]
+markers = [
+    "integration: marks tests as integration tests (require Docker)",
+]
 
 [tool.coverage.run]
 branch = true
@@ -110,3 +113,8 @@ exclude = ["**/__init__.py", "**/__pycache__"]
 
 [tool.uv.sources]
 typedprotocol = { git = "https://github.com/okanakbulut/typedprotocol.git", rev = "main" }
+
+[dependency-groups]
+dev = [
+    "asyncpg>=0.31.0",
+]

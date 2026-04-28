@@ -547,7 +547,7 @@ Required (non-optional) relationships work the same way but the FK column is non
 ```python
 >>> sql, _ = Article.select().prefetch(Author).build()
 >>> sql
-'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+'SELECT "articles"."id","articles"."title","articles"."author_id","authors"."id" "author__id","authors"."name" "author__name" FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
 
 ```
 
@@ -575,7 +575,7 @@ When the related model uses a custom table name via `__table__`, `.prefetch()` u
 
 >>> sql, _ = Comment.select().prefetch(LegacyUser).build()
 >>> sql
-'SELECT * FROM "comments" LEFT JOIN "tbl_users" ON "comments"."author_id"="tbl_users"."id"'
+'SELECT "comments"."id","comments"."body","comments"."author_id","tbl_users"."id" "author__id","tbl_users"."name" "author__name" FROM "comments" LEFT JOIN "tbl_users" ON "comments"."author_id"="tbl_users"."id"'
 
 ```
 
@@ -594,7 +594,7 @@ Multiple relationships are prefetched in a single query:
 
 >>> sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
 >>> sql
-'SELECT * FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
+'SELECT "tagged_articles"."id","tagged_articles"."title","tagged_articles"."author_id","tagged_articles"."tag_id","authors"."id" "author__id","authors"."name" "author__name","tags"."id" "tag__id","tags"."name" "tag__name" FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
 
 ```
 
