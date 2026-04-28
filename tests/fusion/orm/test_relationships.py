@@ -1,5 +1,9 @@
 """Tests for ORM relationship mechanics: FK injection, prefetch joins, hydration, replace() sync, and constraint deduplication."""
 
+import uuid
+
+import pytest
+
 from fusion.orm.model import Model
 
 
@@ -20,12 +24,12 @@ def test_relationship_field_injects_fk_column():
     assert article.author is None
 
 
-import pytest
-
-
 def test_prefetch_generates_left_join():
     sql, _ = Article.select().prefetch(Author).build()
-    assert sql == 'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    assert (
+        sql
+        == 'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    )
 
 
 @pytest.mark.asyncio
@@ -58,7 +62,10 @@ class TaggedArticle(Model):
 
 def test_multi_prefetch_generates_two_joins():
     sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
-    assert sql == 'SELECT * FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
+    assert (
+        sql
+        == 'SELECT * FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
+    )
 
 
 @pytest.mark.asyncio
@@ -102,11 +109,8 @@ def test_required_relationship_injects_required_fk():
     assert fields["author_id"].required
 
 
-import uuid as _uuid
-
-
 class UUIDAuthor(Model):
-    id: _uuid.UUID | None = None
+    id: uuid.UUID | None = None
     name: str
 
 
@@ -151,7 +155,7 @@ def test_fk_column_type_matches_target_id_type():
 
     fields = {f.name: f for f in msgspec.structs.fields(UUIDArticle)}
     assert "author_id" in fields
-    assert fields["author_id"].type == _uuid.UUID | None
+    assert fields["author_id"].type == uuid.UUID | None
 
 
 # ---------------------------------------------------------------------------

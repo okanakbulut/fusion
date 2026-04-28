@@ -7,7 +7,6 @@ SQL strings are verified via .build() → (sql, params).
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from pypika import Table
 
 from fusion.orm.column import Condition
