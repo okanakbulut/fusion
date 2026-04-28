@@ -197,6 +197,16 @@ class SelectQuery:
 
         if self._columns:
             q = PostgreSQLQuery.from_(table).select(*[table[c] for c in self._columns])
+        elif self._prefetches:
+            # pypika silently drops additional column selects when SELECT * is used,
+            # so list the main table's columns explicitly whenever prefetches are present.
+            rel_fields = getattr(self._model, "__relationship_fields__", frozenset())
+            main_cols = [
+                table[f.name]
+                for f in msgspec.structs.fields(self._model)  # type: ignore[arg-type]
+                if f.name not in rel_fields
+            ]
+            q = PostgreSQLQuery.from_(table).select(*main_cols)
         else:
             q = PostgreSQLQuery.from_(table).select("*")
 
@@ -213,11 +223,13 @@ class SelectQuery:
             else:
                 q = join_fn(join_table).on(LiteralValue("true"))  # type: ignore[arg-type]
 
+        already_joined = {jm for jm, _, _, _ in self._joins}
         for prefetch_model in self._prefetches:
             rel_field, fk_constraint = _find_prefetch_relation(self._model, prefetch_model)
             join_table = _make_table(prefetch_model)
-            on_clause = table[fk_constraint.column] == join_table[fk_constraint.target_column]
-            q = q.left_join(join_table).on(on_clause)
+            if prefetch_model not in already_joined:
+                on_clause = table[fk_constraint.column] == join_table[fk_constraint.target_column]
+                q = q.left_join(join_table).on(on_clause)
             for sf in msgspec.structs.fields(prefetch_model):  # type: ignore[arg-type]
                 q = q.select(join_table[sf.name].as_(f"{rel_field}__{sf.name}"))
 

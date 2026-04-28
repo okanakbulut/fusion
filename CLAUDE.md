@@ -41,3 +41,4 @@ uv run pre-commit install --hook-type commit-msg --hook-type pre-commit
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, `test:`, `bump:`).
 - ORM queries are lazy — `.build()` returns `(sql, params)`, nothing hits the DB until `.fetch()`.
 - `Exp` is an escape hatch for raw SQL — never interpolate user input into it.
+- ORM query tests must assert the **full SQL string** — never use `in sql`, `sql.count(...)`, or substring checks. Always `assert sql == "..."` with the complete expected query.

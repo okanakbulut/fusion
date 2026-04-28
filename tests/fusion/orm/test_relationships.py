@@ -26,9 +26,20 @@ def test_relationship_field_injects_fk_column():
 
 def test_prefetch_generates_left_join():
     sql, _ = Article.select().prefetch(Author).build()
-    assert (
-        sql
-        == 'SELECT * FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    assert sql == (
+        'SELECT "articles"."id","articles"."title","articles"."author_id",'
+        '"authors"."id" "author__id","authors"."name" "author__name"'
+        ' FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+    )
+
+
+def test_join_and_prefetch_same_model_no_duplicate_join():
+    """Explicit .join() + .prefetch() on the same model must not emit the table twice."""
+    sql, _ = Article.select().join(Author).prefetch(Author).build()
+    assert sql == (
+        'SELECT "articles"."id","articles"."title","articles"."author_id",'
+        '"authors"."id" "author__id","authors"."name" "author__name"'
+        ' FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
     )
 
 
@@ -62,9 +73,13 @@ class TaggedArticle(Model):
 
 def test_multi_prefetch_generates_two_joins():
     sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
-    assert (
-        sql
-        == 'SELECT * FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
+    assert sql == (
+        'SELECT "tagged_articles"."id","tagged_articles"."title","tagged_articles"."author_id","tagged_articles"."tag_id",'
+        '"authors"."id" "author__id","authors"."name" "author__name",'
+        '"tags"."id" "tag__id","tags"."name" "tag__name"'
+        ' FROM "tagged_articles"'
+        ' LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id"'
+        ' LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
     )
 
 
