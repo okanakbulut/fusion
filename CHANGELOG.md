@@ -1,3 +1,9 @@
+## v0.8.3 (2026-04-28)
+
+### Feat
+
+- fix prefetch duplicate join, add integration tests with DSN-based Postgres
+
 ## v0.8.2 (2026-04-28)
 
 ### Feat
