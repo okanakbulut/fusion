@@ -1,3 +1,10 @@
+## v0.9.0 (2026-04-30)
+
+### Feat
+
+- support multi-module/package discovery and schema-qualified migrations
+- add fusion CLI with snapshot, check, migrate, and serve commands
+
 ## v0.8.4 (2026-04-28)
 
 ### Fix
