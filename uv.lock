@@ -225,11 +225,12 @@ wheels = [
 
 [[package]]
 name = "fusion"
-version = "0.8.3"
+version = "0.8.4"
 source = { editable = "." }
 dependencies = [
     { name = "msgspec" },
     { name = "pypika" },
+    { name = "pyyaml" },
     { name = "typedprotocol" },
 ]
 
@@ -267,6 +268,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-mock", marker = "extra == 'dev'" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.11" },
     { name = "typedprotocol", git = "https://github.com/okanakbulut/typedprotocol.git?rev=main" },
 ]

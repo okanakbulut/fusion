@@ -128,10 +128,15 @@ def serialize(models: list[type[Model]]) -> dict[str, typing.Any]:
                     entry["method"] = idx.method
                 indexes.append(entry)
 
-        tables[table_name] = {
+        table_def: dict[str, typing.Any] = {
             "columns": columns,
             "constraints": constraints,
             "indexes": indexes,
         }
+        schema = getattr(model, "__schema__", None)
+        if schema is not None:
+            table_def["schema"] = schema
+
+        tables[table_name] = table_def
 
     return {"version": 1, "tables": tables}

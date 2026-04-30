@@ -324,6 +324,45 @@ return OutOfStockProblem(detail="Item #42 is out of stock")
 
 ---
 
+## CLI
+
+Fusion ships a `fusion` command for schema management and serving.
+
+### Schema management
+
+```bash
+# Snapshot a single module, a whole package, or multiple modules at once
+fusion snapshot myapp.models
+fusion snapshot myapp                          # walks the package recursively
+fusion snapshot myapp.models myapp.auth.models
+
+# Check for drift — exits 1 on changes, safe as a pre-commit hook
+fusion check myapp
+
+# Apply pending DDL to Postgres
+fusion migrate myapp --dsn postgresql://user:pass@host/db
+
+# Use POSTGRES_DSN env var instead of --dsn
+POSTGRES_DSN=postgresql://user:pass@host/db fusion migrate myapp
+
+# Allow DROP TABLE / DROP COLUMN
+fusion migrate myapp --dsn postgresql://... --drop
+```
+
+All three commands accept one or more module/package arguments and `--snapshot <path>` to override the default `migrations/snapshot.yaml` location.
+
+### Running the server
+
+```bash
+# Start the app with uvicorn (requires: pip install uvicorn)
+fusion serve myapp:app
+
+# Custom host / port / auto-reload
+fusion serve myapp:app --host 127.0.0.1 --port 9000 --reload
+```
+
+---
+
 ## Requirements
 
 - Python 3.12+
