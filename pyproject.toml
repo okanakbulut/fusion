@@ -12,7 +12,11 @@ dependencies = [
  "msgspec>=0.21.1",
  "pypika>=0.51.1",
  "typedprotocol>=0.1.0",
+ "pyyaml>=6.0",
 ]
+
+[project.scripts]
+fusion = "fusion.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/okanakbulut/fusion"
