@@ -3,6 +3,7 @@
 import argparse
 import importlib
 import inspect
+import pkgutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,13 +16,36 @@ from fusion.orm.migration.snapshot import serialize
 from fusion.orm.model import Model
 
 
-def discover_models(module_path: str) -> list[type[Model]]:
-    mod = importlib.import_module(module_path)
-    return [
-        obj
-        for _, obj in inspect.getmembers(mod, inspect.isclass)
-        if issubclass(obj, Model) and obj is not Model and obj.__module__ == mod.__name__
-    ]
+def discover_models(module_paths: list[str]) -> list[type[Model]]:
+    seen: set[int] = set()
+    models: list[type[Model]] = []
+
+    def _collect(mod: object) -> None:
+        for _, obj in inspect.getmembers(mod, inspect.isclass):
+            if (
+                issubclass(obj, Model)
+                and obj is not Model
+                and obj.__module__ == getattr(mod, "__name__", None)
+                and id(obj) not in seen
+            ):
+                seen.add(id(obj))
+                models.append(obj)
+
+    for module_path in module_paths:
+        mod = importlib.import_module(module_path)
+        _collect(mod)
+
+        if hasattr(mod, "__path__"):
+            for _finder, name, _ispkg in pkgutil.walk_packages(
+                mod.__path__, prefix=mod.__name__ + "."
+            ):
+                try:
+                    submod = importlib.import_module(name)
+                    _collect(submod)
+                except ImportError:
+                    pass
+
+    return models
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
@@ -60,6 +84,7 @@ def cmd_check(args: argparse.Namespace) -> None:
 
 def cmd_migrate(args: argparse.Namespace) -> None:
     import asyncio
+    import concurrent.futures
     import os
 
     import asyncpg
@@ -93,7 +118,14 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         finally:
             await conn.close()
 
-    asyncio.run(_run())
+    try:
+        asyncio.get_running_loop()
+        # Called from within an async context (e.g. tests) — run in a thread
+        # with its own event loop to avoid nested-loop errors.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(asyncio.run, _run()).result()
+    except RuntimeError:
+        asyncio.run(_run())
 
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_bytes(msgspec.yaml.encode(current, order="sorted"))
@@ -119,17 +151,23 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_snap = sub.add_parser("snapshot", help="Write model snapshot to YAML")
-    p_snap.add_argument("module", help="Python module containing Model subclasses")
+    p_snap.add_argument(
+        "module", nargs="+", help="Python module(s) or package(s) containing Model subclasses"
+    )
     p_snap.add_argument("--output", default="migrations/snapshot.yaml", metavar="FILE")
     p_snap.set_defaults(func=cmd_snapshot)
 
     p_check = sub.add_parser("check", help="Show pending schema changes")
-    p_check.add_argument("module", help="Python module containing Model subclasses")
+    p_check.add_argument(
+        "module", nargs="+", help="Python module(s) or package(s) containing Model subclasses"
+    )
     p_check.add_argument("--snapshot", default="migrations/snapshot.yaml", metavar="FILE")
     p_check.set_defaults(func=cmd_check)
 
     p_migrate = sub.add_parser("migrate", help="Apply pending migrations to the database")
-    p_migrate.add_argument("module", help="Python module containing Model subclasses")
+    p_migrate.add_argument(
+        "module", nargs="+", help="Python module(s) or package(s) containing Model subclasses"
+    )
     p_migrate.add_argument("--dsn", default=None, help="PostgreSQL connection string")
     p_migrate.add_argument("--snapshot", default="migrations/snapshot.yaml", metavar="FILE")
     p_migrate.add_argument("--drop", action="store_true", help="Allow destructive operations")

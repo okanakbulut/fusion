@@ -3,7 +3,7 @@
 `fusion.orm` is the persistence layer for the fusion framework. It has two responsibilities:
 
 1. **Query building** — composable, injection-proof Postgres queries via a fluent API.
-2. **Schema management** — Python model classes are the single source of truth; `fusion-orm` snapshots, diffs, and migrates forward automatically.
+2. **Schema management** — Python model classes are the single source of truth; the `fusion` CLI snapshots, diffs, and migrates forward automatically.
 
 Queries are built on top of [pypika](https://github.com/kayak/pypika) and executed via [asyncpg](https://github.com/MagicStack/asyncpg). pypika is an implementation detail — it never appears in public APIs.
 
@@ -853,22 +853,38 @@ Multiple CTEs:
 ### Commands
 
 ```bash
-# Serialize current models to migrations/NNNN_<timestamp>.yaml
-fusion-orm snapshot
+# Snapshot a single module
+fusion snapshot myapp.models
 
-# Verify models match the latest snapshot (use as a pre-commit hook)
-fusion-orm check
+# Snapshot an entire package — walks all submodules recursively
+fusion snapshot myapp
 
-# Apply pending snapshots to the database
-fusion-orm migrate --db postgresql://user:pass@host/db
+# Snapshot multiple modules in one pass
+fusion snapshot myapp.models myapp.auth.models
+
+# Verify models match the snapshot — exits 1 on drift (safe as a pre-commit hook)
+fusion check myapp
+
+# Apply pending DDL to the database
+fusion migrate myapp --dsn postgresql://user:pass@host/db
+
+# Or use the POSTGRES_DSN environment variable instead of --dsn
+POSTGRES_DSN=postgresql://user:pass@host/db fusion migrate myapp
+
+# Allow destructive operations (DROP TABLE / DROP COLUMN)
+fusion migrate myapp --dsn postgresql://... --drop
 ```
+
+All three commands accept one or more module/package arguments. Packages are walked recursively — every `Model` subclass found in any submodule is included. Duplicate classes (imported across multiple modules) are collected only once.
+
+All snapshot files are YAML, written to `migrations/snapshot.yaml` by default. Pass `--snapshot <path>` to any command to use a different location.
 
 ### Workflow
 
 1. Change model classes in Python.
-2. Run `fusion-orm snapshot` — a new YAML file is written to `migrations/`.
-3. Commit the model change and the YAML snapshot together. A git pre-commit hook runs `fusion-orm check` and blocks the commit if they are out of sync.
-4. On deploy: `fusion-orm migrate` reads the `_orm_migrations` table, diffs consecutive snapshots, generates DDL, applies it, and records the new version.
+2. Run `fusion snapshot myapp` — `migrations/snapshot.yaml` is updated.
+3. Commit the model change and the snapshot together. A git pre-commit hook that runs `fusion check myapp` will block the commit if they are out of sync.
+4. On deploy: `fusion migrate myapp` diffs the snapshot against the live schema, generates DDL, applies it in a single transaction, and writes the updated snapshot.
 
 ### Snapshot format
 
@@ -888,6 +904,20 @@ tables:
       - { type: unique, columns: [username] }
     indexes:
       - { columns: [email] }
+```
+
+For models with `__schema__` set, the table entry gains a `schema` field and DDL is emitted as `"schema"."table"`:
+
+```yaml
+version: 1
+tables:
+  metrics:
+    schema: analytics
+    columns:
+      id:   { type: SERIAL, nullable: false, primary_key: true }
+      name: { type: TEXT,   nullable: false }
+    constraints: []
+    indexes: []
 ```
 
 ### Migration safety rules
