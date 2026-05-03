@@ -42,6 +42,14 @@ class Created(Response):
 class NoContent(Response):
     status_code: typing.ClassVar[int] = 204
 
+    async def __call__(self, scope, receive, send) -> None:
+        raw_headers = []
+        if self.headers:
+            for k, v in self.headers.items():
+                raw_headers.append((k.encode("latin-1"), v.encode("latin-1")))
+        await send({"type": "http.response.start", "status": 204, "headers": raw_headers})
+        await send({"type": "http.response.body", "body": b""})
+
 
 class Problem(Object, omit_defaults=True):
     """Base RFC-9457 ASGI error response.

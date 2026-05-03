@@ -1,9 +1,9 @@
-"""Tests for fusion.orm.migration.snapshot — serialize Model classes to YAML."""
+"""Tests for fusion.orm.shift.snapshot — serialize Model classes to a dict."""
 
 from fusion.orm.constraints import ForeignKey, Index, UniqueConstraint
 from fusion.orm.fields import db_now, field
-from fusion.orm.migration.snapshot import serialize
 from fusion.orm.model import Model
+from fusion.orm.shift.snapshot import _resolve_pg_type, serialize
 
 
 class User(Model):
@@ -158,12 +158,9 @@ def test_db_uuid_column_has_gen_random_uuid_default():
 
 
 def test_unknown_python_type_defaults_to_text():
-    from fusion.orm.migration.snapshot import _resolve_pg_type
-
     class Misc(Model):
         id: int | None = None
         data: list[str] = field(default_factory=list)
 
-    # list[str] without db_type — falls back to TEXT
     pg_type = _resolve_pg_type(Misc, "data")
     assert pg_type == "TEXT"

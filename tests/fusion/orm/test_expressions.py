@@ -159,3 +159,57 @@ async def test_cte_fetch_calls_conn():
     result = await q.fetch(conn)
     conn.fetch.assert_called_once()
     assert isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# params accumulator — shared list passed to .build()
+# ---------------------------------------------------------------------------
+
+
+def test_union_build_with_shared_params():
+    shared: list = []
+    q = union(
+        Post.select("id").where(user_id=1),
+        Post.select("id").where(user_id=2),
+    )
+    _, params = q.build(shared)
+    assert params is shared
+    assert shared == [1, 2]
+
+
+def test_union_shared_params_continues_numbering():
+    """When shared already has items, union params continue the sequence."""
+    shared: list = ["pre"]
+    q = union(
+        Post.select("id").where(user_id=10),
+        Post.select("id").where(user_id=20),
+    )
+    sql, _ = q.build(shared)
+    assert "$2" in sql
+    assert "$3" in sql
+    assert shared == ["pre", 10, 20]
+
+
+def test_cte_build_with_shared_params():
+    shared: list = []
+    q = cte(
+        main=Post.select("id").where(user_id=1),
+        recent=Post.select().where(user_id=2),
+    )
+    _, params = q.build(shared)
+    assert params is shared
+    assert 1 in shared
+    assert 2 in shared
+
+
+def test_cte_shared_params_continues_numbering():
+    shared: list = ["pre"]
+    q = cte(
+        main=Post.select("id").where(user_id=10),
+        recent=Post.select().where(user_id=20),
+    )
+    _, params = q.build(shared)
+    assert params is shared
+    assert shared[0] == "pre"
+    assert 10 in shared
+    assert 20 in shared

@@ -90,7 +90,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-omit = ["tests/*"]
+omit = ["tests/*", "*/tests/*"]
 source = ["src/fusion"]
 
 [tool.coverage.report]

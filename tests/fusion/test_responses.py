@@ -92,6 +92,15 @@ async def test_no_content_status_204():
     assert status == 204
 
 
+@pytest.mark.asyncio
+async def test_no_content_sends_empty_body():
+    """HTTP 204 must not include a message body (RFC 7230 §3.3)."""
+    status, headers, body = await _call(NoContent())
+    assert status == 204
+    assert body == b""
+    assert "content-length" not in headers
+
+
 # ---------------------------------------------------------------------------
 # Problem (RFC-9457)
 # ---------------------------------------------------------------------------

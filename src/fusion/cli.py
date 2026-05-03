@@ -1,19 +1,50 @@
-"""Fusion CLI — snapshot / check / migrate / serve."""
+"""Fusion CLI — draft / shift / history / serve."""
 
 import argparse
 import importlib
 import inspect
 import pkgutil
+import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
-import msgspec.yaml
-
-from fusion.orm.migration.apply import to_ddl
-from fusion.orm.migration.diff import diff
-from fusion.orm.migration.snapshot import serialize
 from fusion.orm.model import Model
+
+
+def _sanitize_slug(slug: str) -> str:
+    slug = slug.lower()
+    slug = slug.replace(" ", "_")
+    slug = re.sub(r"[^a-z0-9_]", "", slug)
+    slug = re.sub(r"_+", "_", slug)
+    return slug.strip("_")
+
+
+def _infer_modules_from_cwd() -> list[str]:
+    """Return top-level package names found in CWD when pyproject.toml is present."""
+    cwd = Path.cwd()
+    if not (cwd / "pyproject.toml").exists():
+        return []
+    packages = sorted(p.name for p in cwd.iterdir() if p.is_dir() and (p / "__init__.py").exists())
+    if packages:
+        cwd_str = str(cwd)
+        if cwd_str not in sys.path:
+            sys.path.insert(0, cwd_str)
+    return packages
+
+
+def _resolve_modules(args: argparse.Namespace) -> list[str]:
+    modules: list[str] = args.module or []
+    if not modules:
+        modules = _infer_modules_from_cwd()
+    if not modules:
+        print(
+            "Error: no module specified and no pyproject.toml found in current directory.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return modules
 
 
 def discover_models(module_paths: list[str]) -> list[type[Model]]:
@@ -48,88 +79,105 @@ def discover_models(module_paths: list[str]) -> list[type[Model]]:
     return models
 
 
-def cmd_snapshot(args: argparse.Namespace) -> None:
-    models = discover_models(args.module)
-    snapshot = serialize(models)
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(msgspec.yaml.encode(snapshot, order="sorted"))
-    print(f"Snapshot written to {output}")
+def _generate_filename(slug: str, migrations_dir: Path) -> str:
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    base = f"{ts}_{slug}.py"
+    if not (migrations_dir / base).exists():
+        return base
+    counter = 1
+    while (migrations_dir / f"{ts}_{slug}_{counter}.py").exists():
+        counter += 1
+    return f"{ts}_{slug}_{counter}.py"
 
 
-def cmd_check(args: argparse.Namespace) -> None:
-    snapshot_path = Path(args.snapshot)
-    if not snapshot_path.exists():
-        print("No snapshot found. Run `fusion snapshot <module>` first.")
+def _render_shift_file(operations: list, class_name: str) -> str:
+    op_class_names = sorted({type(op).__name__ for op in operations})
+    imports = ", ".join(["Shift", *op_class_names])
+    import_line = f"from fusion.orm.shift import {imports}"
+
+    op_lines = [f"        {op!r}," for op in operations]
+    ops_block = "\n".join(op_lines)
+
+    return (
+        f"{import_line}\n\n\nclass {class_name}(Shift):\n    operations = [\n{ops_block}\n    ]\n"
+    )
+
+
+def _slug_to_class_name(slug: str) -> str:
+    return "".join(part.capitalize() for part in slug.split("_") if part)
+
+
+def cmd_draft(args: argparse.Namespace) -> None:
+    from fusion.orm.shift.draft import diff_states, models_to_schema_state
+    from fusion.orm.shift.replay import replay_shifts
+
+    slug = _sanitize_slug(args.slug)
+    migrations_dir = Path(args.migrations_dir)
+
+    shift_files = sorted(migrations_dir.glob("*.py")) if migrations_dir.exists() else []
+    current_state = replay_shifts(shift_files)
+
+    models = discover_models(_resolve_modules(args))
+    target_state = models_to_schema_state(models)
+
+    ops = diff_states(current_state, target_state)
+    if not ops:
+        print("No changes detected. Nothing to draft.")
         return
 
-    models = discover_models(args.module)
-    current = serialize(models)
-    stored = msgspec.yaml.decode(snapshot_path.read_bytes())
-    changes = diff(stored, current)
-
-    if not changes:
-        print("Up to date.")
-        return
-
-    print("Pending schema changes:")
-    for change in changes:
-        op = change["op"]
-        table = change.get("table", "")
-        col = change.get("column", "")
-        print(f"  {op}: {table}" + (f".{col}" if col else ""))
-    print("Run `fusion snapshot <module>` to update the snapshot.")
-    sys.exit(1)
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    filename = _generate_filename(slug, migrations_dir)
+    class_name = _slug_to_class_name(slug)
+    content = _render_shift_file(ops, class_name)
+    (migrations_dir / filename).write_text(content)
+    print(f"Wrote {migrations_dir / filename}")
 
 
-def cmd_migrate(args: argparse.Namespace) -> None:
+def cmd_shift(args: argparse.Namespace) -> None:
     import asyncio
-    import concurrent.futures
     import os
 
-    import asyncpg
+    from fusion.orm.shift.apply import apply_shifts
 
-    dsn = args.dsn or os.environ.get("POSTGRES_DSN")
+    dsn = args.dsn or os.environ.get("POSTGRES_DSN") or os.environ.get("DATABASE_URL")
     if not dsn:
         print(
-            "Error: DSN required. Pass --dsn or set the POSTGRES_DSN env var.",
+            "Error: DSN required. Pass --dsn or set POSTGRES_DSN / DATABASE_URL.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    models = discover_models(args.module)
-    current = serialize(models)
-    snapshot_path = Path(args.snapshot)
-    stored = msgspec.yaml.decode(snapshot_path.read_bytes()) if snapshot_path.exists() else {}
-    changes = diff(stored, current, allow_drop=args.drop)
+    migrations_dir = Path(args.migrations_dir)
+    shift_files = sorted(migrations_dir.glob("*.py")) if migrations_dir.exists() else []
 
-    if not changes:
-        print("Nothing to migrate.")
-        return
+    names = ", ".join(f.stem for f in shift_files) if shift_files else "(none)"
+    try:
+        asyncio.run(apply_shifts(dsn, shift_files))
+    except Exception as exc:
+        print(f"Error applying shifts [{names}]: {exc}", file=sys.stderr)
+        sys.exit(1)
 
-    statements = to_ddl(changes)
 
-    async def _run() -> None:
-        conn = await asyncpg.connect(dsn)
-        try:
-            async with conn.transaction():
-                for stmt in statements:
-                    await conn.execute(stmt)
-        finally:
-            await conn.close()
+def cmd_history(args: argparse.Namespace) -> None:
+    import asyncio
+    import os
+
+    from fusion.orm.shift.history import get_history
+
+    dsn = args.dsn or os.environ.get("POSTGRES_DSN") or os.environ.get("DATABASE_URL")
+    if not dsn:
+        print(
+            "Error: DSN required. Pass --dsn or set POSTGRES_DSN / DATABASE_URL.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     try:
-        asyncio.get_running_loop()
-        # Called from within an async context (e.g. tests) — run in a thread
-        # with its own event loop to avoid nested-loop errors.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            pool.submit(asyncio.run, _run()).result()
-    except RuntimeError:
-        asyncio.run(_run())
-
-    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_path.write_bytes(msgspec.yaml.encode(current, order="sorted"))
-    print(f"Applied {len(statements)} statement(s). Snapshot updated.")
+        result = asyncio.run(get_history(dsn, as_json=args.json))
+        print(result, end="")
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -150,28 +198,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="fusion", description="Fusion framework CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_snap = sub.add_parser("snapshot", help="Write model snapshot to YAML")
-    p_snap.add_argument(
-        "module", nargs="+", help="Python module(s) or package(s) containing Model subclasses"
+    p_draft = sub.add_parser("draft", help="Generate a shift file from detected model changes")
+    p_draft.add_argument("slug", help="Human-readable suffix for the migration file")
+    p_draft.add_argument(
+        "module", nargs="*", help="Python module(s) or package(s) containing Model subclasses"
     )
-    p_snap.add_argument("--output", default="migrations/snapshot.yaml", metavar="FILE")
-    p_snap.set_defaults(func=cmd_snapshot)
+    p_draft.add_argument(
+        "--migrations-dir", default="migrations", metavar="DIR", dest="migrations_dir"
+    )
+    p_draft.set_defaults(func=cmd_draft)
 
-    p_check = sub.add_parser("check", help="Show pending schema changes")
-    p_check.add_argument(
-        "module", nargs="+", help="Python module(s) or package(s) containing Model subclasses"
+    p_shift = sub.add_parser("shift", help="Apply unapplied shift files to the database")
+    p_shift.add_argument("--dsn", default=None, help="PostgreSQL connection string")
+    p_shift.add_argument(
+        "--migrations-dir", default="migrations", metavar="DIR", dest="migrations_dir"
     )
-    p_check.add_argument("--snapshot", default="migrations/snapshot.yaml", metavar="FILE")
-    p_check.set_defaults(func=cmd_check)
+    p_shift.set_defaults(func=cmd_shift)
 
-    p_migrate = sub.add_parser("migrate", help="Apply pending migrations to the database")
-    p_migrate.add_argument(
-        "module", nargs="+", help="Python module(s) or package(s) containing Model subclasses"
-    )
-    p_migrate.add_argument("--dsn", default=None, help="PostgreSQL connection string")
-    p_migrate.add_argument("--snapshot", default="migrations/snapshot.yaml", metavar="FILE")
-    p_migrate.add_argument("--drop", action="store_true", help="Allow destructive operations")
-    p_migrate.set_defaults(func=cmd_migrate)
+    p_history = sub.add_parser("history", help="Show applied shifts with timestamps")
+    p_history.add_argument("--dsn", default=None, help="PostgreSQL connection string")
+    p_history.add_argument("--json", action="store_true", help="Output as JSON array")
+    p_history.set_defaults(func=cmd_history)
 
     p_serve = sub.add_parser("serve", help="Run the application with uvicorn")
     p_serve.add_argument("app", help="ASGI app path (e.g. myapp:app)")

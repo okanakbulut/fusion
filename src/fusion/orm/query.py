@@ -1,10 +1,11 @@
 import typing
+from typing import Self
 
 import pypika
 from pypika import Order, Parameter, Table
 from pypika import functions as fn
 from pypika.dialects import PostgreSQLQuery
-from pypika.terms import LiteralValue
+from pypika.terms import LiteralValue, ValueWrapper
 
 from .column import Condition
 from .conditions import Q
@@ -116,26 +117,179 @@ def _where_arg_to_criterion(
     return None
 
 
-class SelectQuery:
-    def __init__(self, model: type[Model], columns: tuple[str, ...]) -> None:
+def _render_val(val: typing.Any, params: list) -> typing.Any:
+    """Render an expression as a pypika term, wrapping scalars in ValueWrapper for SELECT."""
+    if hasattr(val, "build"):
+        sub_sql, _ = val.build(params)
+        # SQL functions (e.g. Coalesce) render inline; subqueries need wrapping parens
+        if getattr(val, "_is_sql_function", False):
+            return LiteralValue(sub_sql)
+        return LiteralValue(f"({sub_sql})")
+    # scalar — wrap in ValueWrapper so the alias is rendered correctly in SELECT
+    idx = len(params) + 1
+    params.append(val)
+    return ValueWrapper(Parameter(f"${idx}"))
+
+
+def _render_insert_term(val: typing.Any, params: list) -> typing.Any:
+    """Render an expression as a pypika term suitable for INSERT VALUES."""
+    if hasattr(val, "build"):
+        sub_sql, _ = val.build(params)
+        if getattr(val, "_is_sql_function", False):
+            return LiteralValue(sub_sql)
+        return LiteralValue(f"({sub_sql})")
+    # scalar — bare Parameter (no ValueWrapper) for INSERT
+    idx = len(params) + 1
+    params.append(val)
+    return Parameter(f"${idx}")
+
+
+class Query:
+    def __init__(
+        self,
+        model: type | None = None,
+        **exprs: typing.Any,
+    ) -> None:
         self._model = model
-        self._columns = columns
-        self._wheres: list[Q | Condition] = []
-        self._raw_wheres: list[str] = []
-        self._joins: list[tuple[type, str, _OnArg, str]] = []
-        self._prefetches: list[type[Model]] = []
-        self._order: list[tuple[str, bool]] = []
+        self._exprs = exprs
+        self._wheres: list = []
+        self._order: list = []
+        self._groups: list = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
+        self._joins: list = []
 
-    def where(self, *args: Q | Condition, **kwargs: typing.Any) -> SelectQuery:
-        q = SelectQuery.__new__(SelectQuery)
-        q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
+    def order_by(self, column: str, *, desc: bool = False) -> Self:
+        new_q = self.__class__.__new__(self.__class__)
+        new_q.__dict__ = {**self.__dict__, "_order": list(self._order)}
+        new_q._order.append((column, desc))
+        return new_q
+
+    def group_by(self, *columns: str) -> Self:
+        new_q = self.__class__.__new__(self.__class__)
+        new_q.__dict__ = {**self.__dict__, "_groups": list(self._groups) + list(columns)}
+        return new_q
+
+    def limit(self, n: int) -> Self:
+        new_q = self.__class__.__new__(self.__class__)
+        new_q.__dict__ = {**self.__dict__}
+        new_q._limit_val = n
+        return new_q
+
+    def offset(self, n: int) -> Self:
+        new_q = self.__class__.__new__(self.__class__)
+        new_q.__dict__ = {**self.__dict__}
+        new_q._offset_val = n
+        return new_q
+
+    def where(self, *args: typing.Any, **kwargs: typing.Any) -> Self:
+        new_q = self.__class__.__new__(self.__class__)
+        new_q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
         for arg in args:
-            q._wheres.append(arg)
+            new_q._wheres.append(arg)
         if kwargs:
-            q._wheres.append(Q(**kwargs))
-        return q
+            new_q._wheres.append(Q(**kwargs))
+        return new_q
+
+    def join(
+        self,
+        *,
+        on: tuple | list | None = None,
+        how: str = "inner",
+        **target: typing.Any,
+    ) -> Self:
+        if len(target) != 1:
+            raise ValueError("join() requires exactly one keyword argument: alias=model_or_query")
+        alias, join_target = next(iter(target.items()))
+        new_q = self.__class__.__new__(self.__class__)
+        new_q.__dict__ = {**self.__dict__, "_joins": list(self._joins)}
+        new_q._joins.append((alias, join_target, on, how))
+        return new_q
+
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        if params is None:
+            params = []
+
+        terms = []
+        for alias, expr in self._exprs.items():
+            term = _render_val(expr, params)
+            terms.append(term.as_(alias))
+
+        q = PostgreSQLQuery.select(*terms)
+
+        subquery_joins: list[tuple[str, typing.Any, tuple | list | None, str]] = []
+
+        if self._model is not None:
+            table = _make_table(self._model)
+            q = q.from_(table)
+
+            alias_map: dict[str, Table] = {}
+            for join_alias, join_target, on_arg, how in self._joins:
+                join_fn_name = _JOIN_METHODS.get(how, "join")
+
+                if hasattr(join_target, "build"):
+                    subquery_joins.append((join_alias, join_target, on_arg, how))
+                else:
+                    join_table = _make_table(join_target)
+                    alias_map[join_alias] = join_table
+                    on_clause = _build_explicit_on(on_arg, table, join_table) or _infer_join_on(
+                        self._model, join_target, table, join_table
+                    )
+                    join_fn = getattr(q, join_fn_name)
+                    if on_clause is not None:
+                        q = join_fn(join_table).on(on_clause)
+                    else:
+                        q = join_fn(join_table).on(LiteralValue("true"))
+
+            for where_arg in self._wheres:
+                criterion = _where_arg_to_criterion(where_arg, table, params, alias_map)
+                if criterion is not None:
+                    q = q.where(criterion)
+
+            for col, is_desc in self._order:
+                order = Order.desc if is_desc else Order.asc
+                q = q.orderby(table[col], order=order)
+
+            for col in self._groups:
+                q = q.groupby(table[col])
+
+        if self._limit_val is not None:
+            q = q.limit(self._limit_val)
+        if self._offset_val is not None:
+            q = q.offset(self._offset_val)
+
+        sql = q.get_sql(as_keyword=True)
+
+        _JOIN_KEYWORDS = {
+            "inner": "JOIN",
+            "left": "LEFT JOIN",
+            "right": "RIGHT JOIN",
+            "outer": "FULL OUTER JOIN",
+        }
+        for join_alias, join_target, on_arg, how in subquery_joins:
+            sub_sql, _ = join_target.build(params)
+            join_kw = _JOIN_KEYWORDS.get(how, "JOIN")
+            assert on_arg is not None, "subquery join requires an explicit on= pair"
+            left_col, right_col = on_arg
+            lp, rp = left_col.split("."), right_col.split(".")
+            on_str = f'"{lp[0]}"."{lp[1]}"="{rp[0]}"."{rp[1]}"'
+            sql += f' {join_kw} ({sub_sql}) "{join_alias}" ON {on_str}'
+
+        return sql, params
+
+
+class SelectQuery(Query):
+    def __init__(
+        self,
+        model: type[Model] | None = None,
+        /,
+        *columns: str,
+        **exprs: typing.Any,
+    ) -> None:
+        super().__init__(model, **exprs)
+        self._columns = columns
+        self._raw_wheres: list[str] = []
+        self._prefetches: list[typing.Any] = []
 
     def where_raw(self, exp: typing.Any) -> SelectQuery:
         from .expressions import Exp
@@ -171,35 +325,19 @@ class SelectQuery:
         q.__dict__ = {**self.__dict__, "_prefetches": list(self._prefetches) + list(models)}
         return q
 
-    def order_by(self, column: str, *, desc: bool = False) -> SelectQuery:
-        q = SelectQuery.__new__(SelectQuery)
-        q.__dict__ = {**self.__dict__, "_order": list(self._order)}
-        q._order.append((column, desc))
-        return q
-
-    def limit(self, n: int) -> SelectQuery:
-        q = SelectQuery.__new__(SelectQuery)
-        q.__dict__ = {**self.__dict__}
-        q._limit_val = n
-        return q
-
-    def offset(self, n: int) -> SelectQuery:
-        q = SelectQuery.__new__(SelectQuery)
-        q.__dict__ = {**self.__dict__}
-        q._offset_val = n
-        return q
-
-    def build(self) -> tuple[str, list[typing.Any]]:
+    def _build_base_query(
+        self,
+        table: Table,
+        terms: list[typing.Any],
+    ) -> typing.Any:
         import msgspec.structs
 
-        table = _make_table(self._model)
-        params: list[typing.Any] = []
-
-        if self._columns:
-            q = PostgreSQLQuery.from_(table).select(*[table[c] for c in self._columns])
+        if terms:
+            q = PostgreSQLQuery.from_(table).select(*terms)
         elif self._prefetches:
             # pypika silently drops additional column selects when SELECT * is used,
             # so list the main table's columns explicitly whenever prefetches are present.
+            assert self._model is not None
             rel_fields = getattr(self._model, "__relationship_fields__", frozenset())
             main_cols = [
                 table[f.name]
@@ -209,6 +347,17 @@ class SelectQuery:
             q = PostgreSQLQuery.from_(table).select(*main_cols)
         else:
             q = PostgreSQLQuery.from_(table).select("*")
+        return q
+
+    def _apply_model_clauses(
+        self,
+        q: typing.Any,
+        table: Table,
+        params: list[typing.Any],
+    ) -> typing.Any:
+        import msgspec.structs
+
+        assert self._model is not None
 
         alias_map: dict[str, Table] = {}
         for join_model, alias, on_arg, how in self._joins:
@@ -247,12 +396,42 @@ class SelectQuery:
             order = Order.desc if is_desc else Order.asc
             q = q.orderby(table[col], order=order)
 
+        for col in self._groups:
+            q = q.groupby(table[col])
+
+        return q
+
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        if params is None:
+            params = []
+
+        # Build the SELECT projection terms
+        terms: list[typing.Any] = []
+
+        if self._model is not None:
+            table: Table = _make_table(self._model)
+            # Named columns (e.g. "id", "name")
+            for c in self._columns:
+                terms.append(table[c])
+            # Expression projections (e.g. total=Coalesce("id"))
+            for alias, expr in self._exprs.items():
+                term = _render_val(expr, params)
+                terms.append(term.as_(alias))
+            q = self._build_base_query(table, terms)
+            q = self._apply_model_clauses(q, table, params)
+        else:
+            # No model — free projection (no FROM)
+            for alias, expr in self._exprs.items():
+                term = _render_val(expr, params)
+                terms.append(term.as_(alias))
+            q = PostgreSQLQuery.select(*terms)
+
         if self._limit_val is not None:
             q = q.limit(self._limit_val)
         if self._offset_val is not None:
             q = q.offset(self._offset_val)
 
-        return q.get_sql(), params
+        return q.get_sql(as_keyword=True), params
 
     async def fetch(
         self,
@@ -260,6 +439,7 @@ class SelectQuery:
         *,
         raw: bool = False,
     ) -> list[typing.Any]:
+        assert self._model is not None
         sql, params = self.build()
         records = await conn.fetch(sql, *params)
         if raw:
@@ -269,6 +449,7 @@ class SelectQuery:
         return [_row_to_model(self._model, r) for r in records]
 
     async def fetch_one(self, conn: typing.Any) -> typing.Any:
+        assert self._model is not None
         sql, params = self.build()
         record = await conn.fetchrow(sql, *params)
         if record is None:
@@ -290,26 +471,46 @@ class ExistsExpression:
         return e
 
 
-class InsertQuery:
+class InsertQuery(Query):
     def __init__(self, model: type[Model]) -> None:
-        self._model = model
-        self._rows: list[typing.Any] = []
+        super().__init__(model)
+        self._rows: list[dict[str, typing.Any]] = []
+        self._subquery: typing.Any = None
 
-    def values(self, rows: typing.Any) -> InsertQuery:
-        q = InsertQuery.__new__(InsertQuery)
+    def values(self, rows: typing.Any = None, /, **kwargs: typing.Any) -> Self:
+        if rows is not None and kwargs:
+            raise ValueError("cannot pass both positional rows and kwargs")
+        q = self.__class__.__new__(self.__class__)
         q.__dict__ = {**self.__dict__}
-        if isinstance(rows, list):
+        if rows is None:
+            # kwargs path — single row
+            q._rows = [kwargs]
+            q._subquery = None
+        elif hasattr(rows, "build"):
+            # subquery path — INSERT INTO ... SELECT ...
+            q._rows = []
+            q._subquery = rows
+        elif isinstance(rows, list):
+            if len(rows) == 0:
+                raise ValueError("values() requires at least one row")
+            if not isinstance(rows[0], dict):
+                raise TypeError(
+                    "values() expects a list of dicts, kwargs, or a query; "
+                    f"got list of {type(rows[0]).__name__}"
+                )
             q._rows = list(rows)
+            q._subquery = None
         else:
-            q._rows = [rows]
+            raise TypeError(
+                f"values() expects a list of dicts, kwargs, or a query; got {type(rows).__name__}"
+            )
         return q
 
-    def build(self) -> tuple[str, list[typing.Any]]:
-        table = _make_table(self._model)
+    def _get_columns(self) -> list[str]:
+        assert self._model is not None
         fields = self._model.__fields__
-
         rel_fields = getattr(self._model, "__relationship_fields__", frozenset())
-        columns = [
+        return [
             name
             for name, f in fields.items()
             if name != "id"
@@ -317,50 +518,60 @@ class InsertQuery:
             and name not in rel_fields
         ]
 
-        params: list[typing.Any] = []
-        q = PostgreSQLQuery.into(table).columns(*columns)
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        assert self._model is not None
+        table = _make_table(self._model)
+        columns = self._get_columns()
 
+        if params is None:
+            params = []
+
+        if self._subquery is not None:
+            sub_sql, _ = self._subquery.build(params)
+            table_name = self._model.__table_name__
+            schema = getattr(self._model, "__schema__", None)
+            if schema:
+                table_prefix = f'"{schema}"."{table_name}"'
+            else:
+                table_prefix = f'"{table_name}"'
+            col_list = ",".join(f'"{c}"' for c in columns)
+            sql = f"INSERT INTO {table_prefix} ({col_list}) {sub_sql} RETURNING *"
+            return sql, params
+
+        # Dict rows path
+        q = PostgreSQLQuery.into(table).columns(*columns)
         for row in self._rows:
-            row_params: list[typing.Any] = []
+            terms: list[typing.Any] = []
             for col in columns:
-                val = getattr(row, col)
-                row_params.append(val)
-                params.append(val)
-            base = len(params) - len(row_params) + 1
-            q = q.insert(*[Parameter(f"${base + i}") for i in range(len(row_params))])
+                val = row.get(col)
+                terms.append(_render_insert_term(val, params))
+            q = q.insert(*terms)
 
         q = q.returning("*")  # type: ignore[attr-defined]
         return q.get_sql(), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
+        assert self._model is not None
         sql, params = self.build()
         records = await conn.fetch(sql, *params)
         return [_row_to_model(self._model, r) for r in records]
 
 
-class UpdateQuery:
+class UpdateQuery(Query):
     def __init__(self, model: type[Model]) -> None:
-        self._model = model
+        super().__init__(model)
         self._sets: dict[str, typing.Any] = {}
-        self._wheres: list[Q | Condition] = []
 
-    def set(self, **kwargs: typing.Any) -> UpdateQuery:
-        q = UpdateQuery.__new__(UpdateQuery)
+    def set(self, **kwargs: typing.Any) -> Self:
+        q = self.__class__.__new__(self.__class__)
         q.__dict__ = {**self.__dict__, "_sets": {**self._sets, **kwargs}}
         return q
 
-    def where(self, *args: Q | Condition, **kwargs: typing.Any) -> UpdateQuery:
-        q = UpdateQuery.__new__(UpdateQuery)
-        q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
-        for arg in args:
-            q._wheres.append(arg)
-        if kwargs:
-            q._wheres.append(Q(**kwargs))
-        return q
-
-    def build(self) -> tuple[str, list[typing.Any]]:
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        assert self._model is not None
         table = _make_table(self._model)
-        params: list[typing.Any] = []
+        if params is None:
+            params = []
 
         from .expressions import Exp
 
@@ -382,28 +593,21 @@ class UpdateQuery:
         return q.get_sql(), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
+        assert self._model is not None
         sql, params = self.build()
         records = await conn.fetch(sql, *params)
         return [_row_to_model(self._model, r) for r in records]
 
 
-class DeleteQuery:
+class DeleteQuery(Query):
     def __init__(self, model: type[Model]) -> None:
-        self._model = model
-        self._wheres: list[Q | Condition] = []
+        super().__init__(model)
 
-    def where(self, *args: Q | Condition, **kwargs: typing.Any) -> DeleteQuery:
-        q = DeleteQuery.__new__(DeleteQuery)
-        q.__dict__ = {**self.__dict__, "_wheres": list(self._wheres)}
-        for arg in args:
-            q._wheres.append(arg)
-        if kwargs:
-            q._wheres.append(Q(**kwargs))
-        return q
-
-    def build(self) -> tuple[str, list[typing.Any]]:
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        assert self._model is not None
         table = _make_table(self._model)
-        params: list[typing.Any] = []
+        if params is None:
+            params = []
 
         q = PostgreSQLQuery.from_(table).delete()
 
@@ -416,6 +620,7 @@ class DeleteQuery:
         return q.get_sql(), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
+        assert self._model is not None
         sql, params = self.build()
         records = await conn.fetch(sql, *params)
         return [_row_to_model(self._model, r) for r in records]

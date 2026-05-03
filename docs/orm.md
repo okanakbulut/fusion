@@ -102,8 +102,7 @@ Set `__schema__` to place the table in a Postgres schema other than the default:
 ...     id: int | None = None
 ...     label: str
 
->>> tag = Tag(label="python")
->>> sql, params = Tag.insert().values(tag).build()
+>>> sql, params = Tag.insert().values(label="python").build()
 >>> sql
 'INSERT INTO "tags" ("label") VALUES ($1) RETURNING *'
 
@@ -166,8 +165,7 @@ Anything else requires an explicit `db_type`.
 ...     name: str
 ...     created_at: str | None = field(db_type="TIMESTAMPTZ", default=db_now())
 
->>> e = Event(name="signup")
->>> sql, params = Event.insert().values(e).build()
+>>> sql, params = Event.insert().values(name="signup").build()
 >>> sql
 'INSERT INTO "events" ("name") VALUES ($1) RETURNING *'
 >>> params
@@ -183,8 +181,7 @@ Anything else requires an explicit `db_type`.
 ...     user_id: int
 ...     value: str | None = field(db_type="UUID", default=db_uuid())
 
->>> t = Token(user_id=42)
->>> sql, params = Token.insert().values(t).build()
+>>> sql, params = Token.insert().values(user_id=42).build()
 >>> sql
 'INSERT INTO "tokens" ("user_id") VALUES ($1) RETURNING *'
 
@@ -524,7 +521,7 @@ True
 The relationship field is excluded from `INSERT` — only the FK column is written:
 
 ```python
->>> sql, params = Article.insert().values(Article(title="hello", author_id=1)).build()
+>>> sql, params = Article.insert().values(title="hello", author_id=1).build()
 >>> sql
 'INSERT INTO "articles" ("title","author_id") VALUES ($1,$2) RETURNING *'
 
@@ -547,7 +544,7 @@ Required (non-optional) relationships work the same way but the FK column is non
 ```python
 >>> sql, _ = Article.select().prefetch(Author).build()
 >>> sql
-'SELECT "articles"."id","articles"."title","articles"."author_id","authors"."id" "author__id","authors"."name" "author__name" FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
+'SELECT "articles"."id","articles"."title","articles"."author_id","authors"."id" AS "author__id","authors"."name" AS "author__name" FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
 
 ```
 
@@ -575,7 +572,7 @@ When the related model uses a custom table name via `__table__`, `.prefetch()` u
 
 >>> sql, _ = Comment.select().prefetch(LegacyUser).build()
 >>> sql
-'SELECT "comments"."id","comments"."body","comments"."author_id","tbl_users"."id" "author__id","tbl_users"."name" "author__name" FROM "comments" LEFT JOIN "tbl_users" ON "comments"."author_id"="tbl_users"."id"'
+'SELECT "comments"."id","comments"."body","comments"."author_id","tbl_users"."id" AS "author__id","tbl_users"."name" AS "author__name" FROM "comments" LEFT JOIN "tbl_users" ON "comments"."author_id"="tbl_users"."id"'
 
 ```
 
@@ -594,7 +591,7 @@ Multiple relationships are prefetched in a single query:
 
 >>> sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
 >>> sql
-'SELECT "tagged_articles"."id","tagged_articles"."title","tagged_articles"."author_id","tagged_articles"."tag_id","authors"."id" "author__id","authors"."name" "author__name","tags"."id" "tag__id","tags"."name" "tag__name" FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
+'SELECT "tagged_articles"."id","tagged_articles"."title","tagged_articles"."author_id","tagged_articles"."tag_id","authors"."id" AS "author__id","authors"."name" AS "author__name","tags"."id" AS "tag__id","tags"."name" AS "tag__name" FROM "tagged_articles" LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id" LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
 
 ```
 
@@ -623,8 +620,7 @@ Multiple relationships are prefetched in a single query:
 Single row:
 
 ```python
->>> post = Post(author_id=1, title="Hello")
->>> sql, params = Post.insert().values(post).build()
+>>> sql, params = Post.insert().values(author_id=1, title="Hello").build()
 >>> sql
 'INSERT INTO "posts" ("author_id","title","body") VALUES ($1,$2,$3) RETURNING *'
 >>> params
@@ -635,9 +631,7 @@ Single row:
 Bulk insert — one round-trip:
 
 ```python
->>> p1 = Post(author_id=1, title="First")
->>> p2 = Post(author_id=2, title="Second")
->>> sql, params = Post.insert().values([p1, p2]).build()
+>>> sql, params = Post.insert().values([{"author_id": 1, "title": "First"}, {"author_id": 2, "title": "Second"}]).build()
 >>> sql
 'INSERT INTO "posts" ("author_id","title","body") VALUES ($1,$2,$3),($4,$5,$6) RETURNING *'
 >>> params
@@ -821,6 +815,66 @@ Multiple CTEs:
 
 ---
 
+## Expression projections and SQL functions
+
+`SelectQuery` accepts alias=expression keyword arguments alongside (or instead of) column names. This lets you build custom projections — aggregations, coalesces, subqueries — without writing raw SQL.
+
+### Coalesce
+
+`Coalesce` accepts scalars (`str`, `int`, `float`, `bool`, `None`), subqueries (any object with `.build()`), or nested `Function` objects. All scalar args are parameterized automatically — never interpolated.
+
+```python
+>>> from fusion.orm import SelectQuery, Coalesce
+
+>>> class Config(Model):
+...     id: int | None = None
+...     value: str | None = None
+
+>>> # Scalar fallback — COALESCE(subquery, default)
+>>> sql, params = SelectQuery(
+...     result=Coalesce(Config.select("value").where(id=1), "default")
+... ).build()
+>>> sql
+'SELECT COALESCE((SELECT "value" FROM "configs" WHERE "id"=$1),$2) AS "result"'
+>>> params
+[1, 'default']
+
+```
+
+Nested `Coalesce` — first non-null wins:
+
+```python
+>>> sql, params = SelectQuery(result=Coalesce(None, None, "fallback")).build()
+>>> sql
+'SELECT COALESCE($1,$2,$3) AS "result"'
+>>> params
+[None, None, 'fallback']
+
+```
+
+### Model-free projections
+
+Omit the model to build a projection with no `FROM` clause — useful as a scalar subquery inside another query:
+
+```python
+>>> sql, params = SelectQuery(value=Coalesce(None, "fallback")).build()
+>>> sql
+'SELECT COALESCE($1,$2) AS "value"'
+>>> params
+[None, 'fallback']
+
+```
+
+### Custom SQL functions
+
+Any class with a `to_term(params: list) -> Any` method satisfies the `Function` protocol and can be passed as an expression argument:
+
+```python
+from fusion.orm import Function  # Protocol — use for type hints
+```
+
+---
+
 ## Raw SQL fragments
 
 `Exp` wraps a raw SQL fragment and passes it through without escaping. Use it for Postgres operators or expressions that the query builder doesn't cover:
@@ -951,5 +1005,9 @@ from fusion.orm import (
     ForeignKey,      # FK constraint + JOIN inference
     UniqueConstraint,
     Index,
+    Query,           # base class for all query types (useful for isinstance checks)
+    SelectQuery,     # SELECT builder — returned by Model.select(); also used for free projections
+    Coalesce,        # SQL COALESCE(...) function
+    Function,        # Protocol for custom SQL functions
 )
 ```

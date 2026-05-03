@@ -86,6 +86,10 @@ def _inject_relationship_fields(
             extra_constraints.append(ForeignKey(fk_col, annotation))
             if fk_col not in annotations:
                 injected[fk_col] = _fk_col_type(annotation, optional=False)
+            # Relation fields are lazily populated (only when prefetched); give them
+            # a None default so models can be built from flat DB rows with just the FK.
+            injected[field_name] = annotation | None
+            namespace[field_name] = None
 
     if injected:
         namespace["__annotations__"] = {**annotations, **injected}
@@ -108,6 +112,15 @@ class MetaModel(MetaObject):
         db_indexes: list[typing.Any] = list(namespace.pop("__indexes__", []))
 
         auto_fk, rel_fields = _inject_relationship_fields(namespace)
+
+        # Explicit FKs in __constraints__ take precedence over auto-generated ones so that
+        # on_delete / on_update options declared by the user are not silently dropped.
+        from fusion.orm.constraints import ForeignKey as _ForeignKey
+
+        explicit_fk_cols = {c.column for c in db_constraints if isinstance(c, _ForeignKey)}
+        auto_fk = [
+            c for c in auto_fk if not (isinstance(c, _ForeignKey) and c.column in explicit_fk_cols)
+        ]
         db_constraints = auto_fk + db_constraints
 
         kwargs.setdefault("kw_only", True)
@@ -158,10 +171,10 @@ class Model(Object, metaclass=MetaModel):
         return msgspec.structs.replace(self, **kwargs)  # type: ignore[arg-type]
 
     @classmethod
-    def select(cls, *columns: str) -> SelectQuery:
+    def select(cls, *columns: str, **exprs: typing.Any) -> SelectQuery:
         from .query import SelectQuery
 
-        return SelectQuery(cls, columns)
+        return SelectQuery(cls, *columns, **exprs)
 
     @classmethod
     def insert(cls) -> InsertQuery:

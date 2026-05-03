@@ -1,15 +1,8 @@
-import re
 import typing
 
-if typing.TYPE_CHECKING:  # pragma: no cover
-    from .query import SelectQuery
-
-
-def _renumber_params(sql: str, offset: int) -> str:
-    def replace(m: re.Match[str]) -> str:
-        return f"${int(m.group(1)) + offset}"
-
-    return re.sub(r"\$(\d+)", replace, sql)
+# if typing.TYPE_CHECKING:  # pragma: no cover
+#     from .query import SelectQuery
+from .query import DeleteQuery, InsertQuery, SelectQuery, UpdateQuery
 
 
 class Exp:
@@ -24,18 +17,17 @@ class UnionQuery:
         self._queries = queries
         self._all = all
 
-    def build(self) -> tuple[str, list[typing.Any]]:
-        all_params: list[typing.Any] = []
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        if params is None:
+            params = []
         parts: list[str] = []
 
         for q in self._queries:
-            sql, params = q.build()
-            sql = _renumber_params(sql, len(all_params))
+            sql, _ = q.build(params)
             parts.append(f"({sql})")
-            all_params.extend(params)
 
         keyword = "UNION ALL" if self._all else "UNION"
-        return f" {keyword} ".join(parts), all_params
+        return f" {keyword} ".join(parts), params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
         sql, params = self.build()
@@ -44,11 +36,14 @@ class UnionQuery:
         return [dict(r.items()) for r in records]
 
 
+type AnyQuery = SelectQuery | InsertQuery | UpdateQuery | DeleteQuery | UnionQuery | CTEQuery
+
+
 class CTEQuery:
     def __init__(
         self,
-        main: SelectQuery,
-        ctes: dict[str, SelectQuery | UnionQuery],
+        main: AnyQuery,
+        ctes: dict[str, AnyQuery],
         *,
         recursive: bool = False,
     ) -> None:
@@ -56,23 +51,20 @@ class CTEQuery:
         self._ctes = ctes
         self._recursive = recursive
 
-    def build(self) -> tuple[str, list[typing.Any]]:
-        all_params: list[typing.Any] = []
+    def build(self, params: list[typing.Any] | None = None) -> tuple[str, list[typing.Any]]:
+        if params is None:
+            params = []
         cte_parts: list[str] = []
 
         for name, subquery in self._ctes.items():
-            sql, params = subquery.build()
-            sql = _renumber_params(sql, len(all_params))
+            sql, _ = subquery.build(params)
             cte_parts.append(f"{name} AS ({sql})")
-            all_params.extend(params)
 
-        main_sql, main_params = self._main.build()
-        main_sql = _renumber_params(main_sql, len(all_params))
-        all_params.extend(main_params)
+        main_sql, _ = self._main.build(params)
 
         keyword = "WITH RECURSIVE" if self._recursive else "WITH"
         with_clause = ", ".join(cte_parts)
-        return f"{keyword} {with_clause} {main_sql}", all_params
+        return f"{keyword} {with_clause} {main_sql}", params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
         sql, params = self.build()
@@ -84,9 +76,9 @@ def union(*queries: SelectQuery, all: bool = False) -> UnionQuery:
     return UnionQuery(list(queries), all=all)
 
 
-def cte(*, main: SelectQuery, **named_ctes: SelectQuery | UnionQuery) -> CTEQuery:
+def cte(*, main: AnyQuery, **named_ctes: AnyQuery) -> CTEQuery:
     return CTEQuery(main, named_ctes)
 
 
-def recursive_cte(*, main: SelectQuery, **named_ctes: SelectQuery | UnionQuery) -> CTEQuery:
+def recursive_cte(*, main: AnyQuery, **named_ctes: AnyQuery) -> CTEQuery:
     return CTEQuery(main, named_ctes, recursive=True)

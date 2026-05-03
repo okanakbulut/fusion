@@ -1,7 +1,10 @@
+import logging
 import re
 import typing
 
 import msgspec
+
+_logger = logging.getLogger(__name__)
 
 from .context import Context
 from .exceptions import ValidationException
@@ -128,7 +131,7 @@ class TreeRouter:
                 except ValidationException as exc:
                     response = ValidationProblem(errors=exc.errors, detail=exc.detail)
                 except Exception:
-                    # TODO: log the exception here
+                    _logger.exception("Unhandled exception in route handler")
                     response = InternalServerError()
                 return await response(scope, receive, send)
 

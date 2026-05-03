@@ -4,10 +4,9 @@ import typing
 import asyncpg
 import pytest_asyncio
 
-from fusion.orm.migration.apply import to_ddl
-from fusion.orm.migration.diff import diff
-from fusion.orm.migration.snapshot import serialize
 from fusion.orm.model import Model
+from fusion.orm.shift.draft import diff_states, models_to_schema_state
+from fusion.orm.shift.state import SchemaState
 
 
 @pytest_asyncio.fixture
@@ -18,10 +17,10 @@ async def pg_conn() -> typing.AsyncGenerator[asyncpg.Connection]:
 
 
 async def apply_schema(conn: asyncpg.Connection, models: list[type[Model]]) -> None:
-    snapshot = serialize(models)
-    statements = to_ddl(diff({}, snapshot))
-    for stmt in statements:
-        await conn.execute(stmt)
+    target = models_to_schema_state(models)
+    ops = diff_states(SchemaState(), target)
+    for op in ops:
+        await conn.execute(op.to_ddl())
 
 
 async def drop_tables(conn: asyncpg.Connection, models: list[type[Model]]) -> None:

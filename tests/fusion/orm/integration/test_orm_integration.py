@@ -4,9 +4,6 @@ import asyncpg
 import pytest
 
 from fusion.orm import Model
-from fusion.orm.migration.apply import to_ddl
-from fusion.orm.migration.diff import diff
-from fusion.orm.migration.snapshot import serialize
 
 from .conftest import apply_schema, drop_tables
 

@@ -13,8 +13,18 @@ from fusion.orm.column import Condition
 from fusion.orm.conditions import Q
 from fusion.orm.constraints import ForeignKey
 from fusion.orm.fields import db_now, db_uuid, field
+from fusion.orm.functions import Coalesce
 from fusion.orm.model import Model
-from fusion.orm.query import ExistsExpression, _infer_join_on, _where_arg_to_criterion
+from fusion.orm.query import (
+    DeleteQuery,
+    ExistsExpression,
+    InsertQuery,
+    Query,
+    SelectQuery,
+    UpdateQuery,
+    _infer_join_on,
+    _where_arg_to_criterion,
+)
 
 # ---------------------------------------------------------------------------
 # Shared models
@@ -378,8 +388,7 @@ def test_select_where_with_schema():
 
 
 def test_insert_with_schema():
-    metric = Metric(name="cpu")
-    sql, params = Metric.insert().values(metric).build()
+    sql, params = Metric.insert().values(name="cpu").build()
     assert sql == 'INSERT INTO "analytics"."metrics" ("name") VALUES ($1) RETURNING *'
     assert params == ["cpu"]
 
@@ -401,21 +410,91 @@ def test_delete_with_schema():
 # ---------------------------------------------------------------------------
 
 
-def test_insert_single_row_sql():
-    post = Post(user_id=1, title="hello")
-    sql, params = Post.insert().values(post).build()
+def test_insert_single_row_kwargs():
+    sql, params = Post.insert().values(user_id=1, title="hello").build()
     assert sql == 'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3) RETURNING *'
     assert params == [1, "hello", None]
 
 
-def test_insert_bulk_values():
-    p1 = Post(user_id=1, title="first")
-    p2 = Post(user_id=2, title="second")
-    sql, params = Post.insert().values([p1, p2]).build()
+def test_insert_bulk_list_of_dicts():
+    sql, params = (
+        Post.insert()
+        .values(
+            [
+                {"user_id": 1, "title": "first"},
+                {"user_id": 2, "title": "second"},
+            ]
+        )
+        .build()
+    )
     assert sql == (
         'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3),($4,$5,$6) RETURNING *'
     )
     assert params == [1, "first", None, 2, "second", None]
+
+
+def test_insert_subquery():
+    sql, params = Post.insert().values(User.select("id", "username").where(id=5)).build()
+    assert sql == (
+        'INSERT INTO "posts" ("user_id","title","body")'
+        ' SELECT "id","username" FROM "users" WHERE "id"=$1'
+        " RETURNING *"
+    )
+    assert params == [5]
+
+
+def test_insert_values_both_positional_and_kwargs_raises():
+    with pytest.raises(ValueError, match="cannot pass both positional rows and kwargs"):
+        Post.insert().values([{"user_id": 1, "title": "a"}], title="b")
+
+
+def test_insert_values_empty_list_raises():
+    with pytest.raises(ValueError, match="at least one row"):
+        Post.insert().values([])
+
+
+def test_insert_values_list_of_non_dict_raises():
+    with pytest.raises(TypeError, match="list of dicts"):
+        Post.insert().values(["not a dict"])
+
+
+def test_insert_values_wrong_type_raises():
+    with pytest.raises(TypeError, match="list of dicts"):
+        Post.insert().values(42)
+
+
+def test_insert_values_function_in_dict():
+    """A Coalesce (sql function) as a dict value renders inline in INSERT."""
+    sql, params = (
+        Post.insert()
+        .values(
+            user_id=1,
+            title=Coalesce("default_title", None),
+        )
+        .build()
+    )
+    assert sql == (
+        'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,COALESCE($2,$3),$4) RETURNING *'
+    )
+    assert params == [1, "default_title", None, None]
+
+
+def test_insert_values_subquery_in_dict():
+    """A SelectQuery as a dict value wraps in parens in INSERT VALUES."""
+    sql, params = (
+        Post.insert()
+        .values(
+            user_id=User.select("id").where(id=99),
+            title="hello",
+        )
+        .build()
+    )
+    assert sql == (
+        'INSERT INTO "posts" ("user_id","title","body")'
+        ' VALUES ((SELECT "id" FROM "users" WHERE "id"=$1),$2,$3)'
+        " RETURNING *"
+    )
+    assert params == [99, "hello", None]
 
 
 # ---------------------------------------------------------------------------
@@ -507,8 +586,7 @@ async def test_fetch_one_returns_none_when_no_row():
 
 @pytest.mark.asyncio
 async def test_insert_fetch_calls_conn_fetch(record_conn):
-    post = Post(user_id=1, title="hello")
-    await Post.insert().values(post).fetch(record_conn)
+    await Post.insert().values(user_id=1, title="hello").fetch(record_conn)
     record_conn.fetch.assert_called_once()
     sql = record_conn.fetch.call_args[0][0]
     assert sql == 'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3) RETURNING *'
@@ -700,3 +778,345 @@ async def test_select_fetch_one_returns_model_instance():
     result = await Post.select().where(id=1).fetch_one(conn)
     assert isinstance(result, Post)
     assert result.id == 1
+
+
+# ---------------------------------------------------------------------------
+# params accumulator — shared list passed to .build()
+# ---------------------------------------------------------------------------
+
+
+def test_select_build_with_shared_params():
+    shared: list = []
+    sql, params = Post.select().where(user_id=1).build(shared)
+    assert sql == 'SELECT * FROM "posts" WHERE "user_id"=$1'
+    assert params is shared
+    assert shared == [1]
+
+
+def test_insert_build_with_shared_params():
+    shared: list = []
+    _, params = Post.insert().values(user_id=1, title="hi").build(shared)
+    assert params is shared
+    assert 1 in shared
+    assert "hi" in shared
+
+
+def test_update_build_with_shared_params():
+    shared: list = []
+    _, params = Post.update().set(title="new").where(user_id=1).build(shared)
+    assert params is shared
+    assert "new" in shared
+    assert 1 in shared
+
+
+def test_delete_build_with_shared_params():
+    shared: list = []
+    _, params = Post.delete().where(user_id=1).build(shared)
+    assert params is shared
+    assert 1 in shared
+
+
+def test_select_shared_params_continues_numbering():
+    """When params already has items, new params continue the sequence."""
+    shared: list = ["existing"]  # offset of 1
+    sql, params = Post.select().where(user_id=2).build(shared)
+    assert "$2" in sql  # not $1 — continues from offset
+    assert params is shared
+    assert shared == ["existing", 2]
+
+
+# ---------------------------------------------------------------------------
+# Cycle 2: SelectQuery extends Query base class
+# ---------------------------------------------------------------------------
+
+# --- Tracer bullet ---
+
+
+def test_select_query_inherits_from_query():
+    """SelectQuery must be a subclass of Query."""
+    assert issubclass(SelectQuery, Query)
+
+
+def test_select_query_with_columns_builds_correct_sql():
+    """Tracer bullet: positional columns → SELECT col1,col2 FROM table."""
+    sql, params = SelectQuery(User, "id", "name").build()
+    assert sql == 'SELECT "id","name" FROM "users"'
+    assert params == []
+
+
+# --- Expression projections ---
+
+
+def test_select_query_expression_projection():
+    """SelectQuery(Model, alias=expr) → SELECT expr AS alias FROM table."""
+    sql, params = SelectQuery(User, total=Coalesce("x", None)).build()
+    assert sql == 'SELECT COALESCE($1,$2) AS "total" FROM "users"'
+    assert params == ["x", None]
+
+
+# --- Mixed columns + expressions ---
+
+
+def test_select_query_mixed_columns_and_expressions():
+    """Both named columns and expr projections together."""
+    sql, params = SelectQuery(User, "id", total=Coalesce("x", None)).build()
+    assert sql == 'SELECT "id",COALESCE($1,$2) AS "total" FROM "users"'
+    assert params == ["x", None]
+
+
+# --- No model (free projection) ---
+
+
+def test_select_query_no_model_free_projection():
+    """SelectQuery with no model and only exprs produces a free SELECT (no FROM)."""
+    sql, params = SelectQuery(total=Coalesce("x", None)).build()
+    assert sql == 'SELECT COALESCE($1,$2) AS "total"'
+    assert params == ["x", None]
+
+
+# --- Inherited methods return SelectQuery type ---
+
+
+def test_select_query_where_inherited_returns_select_query():
+    """.where() is inherited from Query and returns SelectQuery (not plain Query)."""
+    result = SelectQuery(User, "id").where(id=1)
+    assert type(result) is SelectQuery
+
+
+def test_select_query_order_by_inherited_returns_select_query():
+    """.order_by() is inherited from Query and returns SelectQuery."""
+    result = SelectQuery(User, "id").order_by("id")
+    assert type(result) is SelectQuery
+
+
+# --- group_by in SelectQuery.build() ---
+
+
+def test_select_query_group_by_builds_group_by_clause():
+    """group_by() is inherited and SelectQuery.build() applies GROUP BY."""
+    sql, params = SelectQuery(User, total=Coalesce("x", None)).where(id=1).group_by("email").build()
+    assert sql == 'SELECT COALESCE($1,$2) AS "total" FROM "users" WHERE "id"=$3 GROUP BY "email"'
+    assert params == ["x", None, 1]
+
+
+# --- prefetch still works ---
+
+
+def test_select_query_prefetch_still_works():
+    """.prefetch() still returns a SelectQuery instance."""
+    result = Post.select().prefetch(User)
+    assert isinstance(result, SelectQuery)
+
+
+# --- where_raw still works ---
+
+
+def test_select_query_where_raw_still_works():
+    """where_raw() with Exp object still filters rows."""
+    from fusion.orm.expressions import Exp
+
+    sql, params = Post.select().where_raw(Exp("id IS NOT NULL")).build()
+    assert sql == 'SELECT * FROM "posts" WHERE id IS NOT NULL'
+    assert params == []
+
+
+# ---------------------------------------------------------------------------
+# Cycle 3: Model.select() passes *columns AND **exprs to SelectQuery
+# ---------------------------------------------------------------------------
+
+
+# --- Tracer bullet ---
+
+
+def test_model_select_with_single_column_tracer():
+    """Model.select('id') returns SelectQuery with correct SQL."""
+    q = User.select("id")
+    assert isinstance(q, SelectQuery)
+    sql, params = q.build()
+    assert sql == 'SELECT "id" FROM "users"'
+    assert params == []
+
+
+# --- SELECT * ---
+
+
+def test_model_select_no_args_returns_star():
+    """User.select() → SELECT * FROM users."""
+    sql, params = User.select().build()
+    assert sql == 'SELECT * FROM "users"'
+    assert params == []
+
+
+# --- Specific columns ---
+
+
+def test_model_select_multiple_columns():
+    """User.select('id', 'email') → SELECT id,email FROM users."""
+    sql, params = User.select("id", "email").build()
+    assert sql == 'SELECT "id","email" FROM "users"'
+    assert params == []
+
+
+# --- Expression projection via Model.select() ---
+
+
+def test_model_select_expression_kwarg():
+    """User.select(total=Coalesce(...)) passes **exprs through to SelectQuery."""
+    sql, params = User.select(total=Coalesce("x", None)).build()
+    assert sql == 'SELECT COALESCE($1,$2) AS "total" FROM "users"'
+    assert params == ["x", None]
+
+
+# --- Mixed columns + expressions via Model.select() ---
+
+
+def test_model_select_mixed_columns_and_expressions():
+    """User.select('id', total=Coalesce(...)) passes both through."""
+    sql, params = User.select("id", total=Coalesce("x", None)).build()
+    assert sql == 'SELECT "id",COALESCE($1,$2) AS "total" FROM "users"'
+    assert params == ["x", None]
+
+
+# ---------------------------------------------------------------------------
+# Cycle 4: UpdateQuery and DeleteQuery extend Query base class
+# ---------------------------------------------------------------------------
+
+
+# --- Tracer bullet ---
+
+
+def test_update_query_inherits_from_query():
+    """UpdateQuery must be a subclass of Query."""
+    assert issubclass(UpdateQuery, Query)
+
+
+# --- UpdateQuery: where() returns UpdateQuery ---
+
+
+def test_update_query_where_returns_update_query():
+    """.where() on UpdateQuery returns UpdateQuery, not plain Query."""
+    result = Post.update().where(id=1)
+    assert type(result) is UpdateQuery
+
+
+# --- UpdateQuery: set() returns UpdateQuery ---
+
+
+def test_update_query_set_returns_update_query():
+    """.set() returns UpdateQuery, not plain object."""
+    result = Post.update().set(title="x")
+    assert type(result) is UpdateQuery
+
+
+# --- UpdateQuery: chained where + set preserves type ---
+
+
+def test_update_query_chained_where_and_set_preserves_type():
+    """.set().where() chain returns UpdateQuery at every step."""
+    q = Post.update().set(title="x").where(id=1)
+    assert type(q) is UpdateQuery
+
+
+# --- UpdateQuery: where() still produces correct SQL ---
+
+
+def test_update_query_where_sql_unchanged():
+    """Inheriting where() from Query must not change the UPDATE SQL output."""
+    sql, params = Post.update().set(title="new title").where(user_id=1).build()
+    assert sql == 'UPDATE "posts" SET "title"=$1 WHERE "user_id"=$2 RETURNING *'
+    assert params == ["new title", 1]
+
+
+# --- UpdateQuery: multiple where() calls accumulate conditions ---
+
+
+def test_update_query_multiple_where_calls_accumulate():
+    sql, params = Post.update().set(body="b").where(user_id=1).where(id=5).build()
+    assert sql == 'UPDATE "posts" SET "body"=$1 WHERE "user_id"=$2 AND "id"=$3 RETURNING *'
+    assert params == ["b", 1, 5]
+
+
+# --- DeleteQuery: subclass tracer ---
+
+
+def test_delete_query_inherits_from_query():
+    """DeleteQuery must be a subclass of Query."""
+    assert issubclass(DeleteQuery, Query)
+
+
+# --- DeleteQuery: where() returns DeleteQuery ---
+
+
+def test_delete_query_where_returns_delete_query():
+    """.where() on DeleteQuery returns DeleteQuery, not plain Query."""
+    result = Post.delete().where(id=1)
+    assert type(result) is DeleteQuery
+
+
+# --- DeleteQuery: where() still produces correct SQL ---
+
+
+def test_delete_query_where_sql_unchanged():
+    """Inheriting where() from Query must not change the DELETE SQL output."""
+    sql, params = Post.delete().where(user_id=1).build()
+    assert sql == 'DELETE FROM "posts" WHERE "user_id"=$1 RETURNING *'
+    assert params == [1]
+
+
+# --- DeleteQuery: multiple where() calls accumulate conditions ---
+
+
+def test_delete_query_multiple_where_calls_accumulate():
+    sql, params = Post.delete().where(user_id=1).where(id=5).build()
+    assert sql == 'DELETE FROM "posts" WHERE "user_id"=$1 AND "id"=$2 RETURNING *'
+    assert params == [1, 5]
+
+
+# ---------------------------------------------------------------------------
+# Cycle 5: InsertQuery extends Query base class
+# ---------------------------------------------------------------------------
+
+
+# --- Tracer bullet ---
+
+
+def test_insert_query_inherits_from_query():
+    """InsertQuery must be a subclass of Query."""
+    assert issubclass(InsertQuery, Query)
+
+
+# --- InsertQuery: values() returns InsertQuery (not plain Query) ---
+
+
+def test_insert_query_values_returns_insert_query():
+    """.values() must return InsertQuery, not plain Query."""
+    result = Post.insert().values(user_id=1, title="hello")
+    assert type(result) is InsertQuery
+
+
+# --- InsertQuery: existing INSERT SQL still correct (build() behavior unchanged) ---
+
+
+def test_insert_query_single_row_sql_unchanged():
+    """Inheriting from Query must not change the INSERT SQL output."""
+    sql, params = Post.insert().values(user_id=1, title="hello").build()
+    assert sql == 'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3) RETURNING *'
+    assert params == [1, "hello", None]
+
+
+def test_insert_query_bulk_values_sql_unchanged():
+    """Bulk insert SQL must remain correct after InsertQuery extends Query."""
+    sql, params = (
+        Post.insert()
+        .values(
+            [
+                {"user_id": 1, "title": "first"},
+                {"user_id": 2, "title": "second"},
+            ]
+        )
+        .build()
+    )
+    assert sql == (
+        'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3),($4,$5,$6) RETURNING *'
+    )
+    assert params == [1, "first", None, 2, "second", None]

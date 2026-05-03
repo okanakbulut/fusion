@@ -28,7 +28,7 @@ def test_prefetch_generates_left_join():
     sql, _ = Article.select().prefetch(Author).build()
     assert sql == (
         'SELECT "articles"."id","articles"."title","articles"."author_id",'
-        '"authors"."id" "author__id","authors"."name" "author__name"'
+        '"authors"."id" AS "author__id","authors"."name" AS "author__name"'
         ' FROM "articles" LEFT JOIN "authors" ON "articles"."author_id"="authors"."id"'
     )
 
@@ -38,7 +38,7 @@ def test_join_and_prefetch_same_model_no_duplicate_join():
     sql, _ = Article.select().join(Author).prefetch(Author).build()
     assert sql == (
         'SELECT "articles"."id","articles"."title","articles"."author_id",'
-        '"authors"."id" "author__id","authors"."name" "author__name"'
+        '"authors"."id" AS "author__id","authors"."name" AS "author__name"'
         ' FROM "articles" JOIN "authors" ON "articles"."author_id"="authors"."id"'
     )
 
@@ -94,7 +94,7 @@ def test_prefetch_model_own_rel_field_excluded_from_select():
     sql, _ = Place.select().prefetch(City).build()
     assert sql == (
         'SELECT "places"."id","places"."title","places"."city_id",'
-        '"cities"."id" "city__id","cities"."name" "city__name","cities"."country_id" "city__country_id"'
+        '"cities"."id" AS "city__id","cities"."name" AS "city__name","cities"."country_id" AS "city__country_id"'
         ' FROM "places" LEFT JOIN "cities" ON "places"."city_id"="cities"."id"'
     )
 
@@ -104,7 +104,7 @@ def test_join_prefetch_where_on_joined_fk_column():
     sql, params = Place.select().join(City).prefetch(City).where(city__country_id=7).build()
     assert sql == (
         'SELECT "places"."id","places"."title","places"."city_id",'
-        '"cities"."id" "city__id","cities"."name" "city__name","cities"."country_id" "city__country_id"'
+        '"cities"."id" AS "city__id","cities"."name" AS "city__name","cities"."country_id" AS "city__country_id"'
         ' FROM "places"'
         ' JOIN "cities" ON "places"."city_id"="cities"."id"'
         ' WHERE "cities"."country_id"=$1'
@@ -116,8 +116,8 @@ def test_multi_prefetch_generates_two_joins():
     sql, _ = TaggedArticle.select().prefetch(Author, Tag).build()
     assert sql == (
         'SELECT "tagged_articles"."id","tagged_articles"."title","tagged_articles"."author_id","tagged_articles"."tag_id",'
-        '"authors"."id" "author__id","authors"."name" "author__name",'
-        '"tags"."id" "tag__id","tags"."name" "tag__name"'
+        '"authors"."id" AS "author__id","authors"."name" AS "author__name",'
+        '"tags"."id" AS "tag__id","tags"."name" AS "tag__name"'
         ' FROM "tagged_articles"'
         ' LEFT JOIN "authors" ON "tagged_articles"."author_id"="authors"."id"'
         ' LEFT JOIN "tags" ON "tagged_articles"."tag_id"="tags"."id"'
@@ -186,7 +186,7 @@ def test_fk_constraint_auto_registered():
 
 
 def test_relationship_field_excluded_from_insert():
-    sql, _ = Article.insert().values(Article(title="hello", author_id=1)).build()
+    sql, _ = Article.insert().values(title="hello", author_id=1).build()
     assert sql == 'INSERT INTO "articles" ("title","author_id") VALUES ($1,$2) RETURNING *'
 
 
