@@ -332,7 +332,7 @@ Supported lookup suffixes:
 | `__lte` | `<= $n` |
 | `__like` | `LIKE $n` |
 | `__ilike` | `ILIKE $n` |
-| `__in` | `IN $n` |
+| `__in` | `= ANY($n)` |
 | `__is_null` | `IS NULL` |
 | `__is_not_null` | `IS NOT NULL` |
 
@@ -345,7 +345,7 @@ Supported lookup suffixes:
 
 >>> sql, params = Post.select().where(author_id__in=[1, 2, 3]).build()
 >>> sql
-'SELECT * FROM "posts" WHERE "author_id" IN $1'
+'SELECT * FROM "posts" WHERE "author_id" = ANY($1)'
 >>> params
 [[1, 2, 3]]
 

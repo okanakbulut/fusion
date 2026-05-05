@@ -65,7 +65,7 @@ def _build_criterion(
             idx = len(params) + 1
             if cond.lookup == "in":
                 params.append(list(cond.value))
-                criteria.append(col.isin(Parameter(f"${idx}")))
+                criteria.append(LiteralValue(f'"{cond.column}" = ANY(${idx})'))
             elif cond.lookup == "startswith":
                 params.append(f"{cond.value}%")
                 criteria.append(op(col, Parameter(f"${idx}")))
@@ -476,6 +476,8 @@ class InsertQuery(Query):
         super().__init__(model)
         self._rows: list[dict[str, typing.Any]] = []
         self._subquery: typing.Any = None
+        self._conflict_columns: list[str] = []
+        self._update_columns: list[str] = []
 
     def values(self, rows: typing.Any = None, /, **kwargs: typing.Any) -> Self:
         if rows is not None and kwargs:
@@ -504,6 +506,17 @@ class InsertQuery(Query):
             raise TypeError(
                 f"values() expects a list of dicts, kwargs, or a query; got {type(rows).__name__}"
             )
+        return q
+
+    def on_conflict(
+        self,
+        conflict_columns: list[str],
+        update_columns: list[str],
+    ) -> Self:
+        q = self.__class__.__new__(self.__class__)
+        q.__dict__ = {**self.__dict__}
+        q._conflict_columns = list(conflict_columns)
+        q._update_columns = list(update_columns)
         return q
 
     def _get_columns(self) -> list[str]:
@@ -548,7 +561,25 @@ class InsertQuery(Query):
             q = q.insert(*terms)
 
         q = q.returning("*")  # type: ignore[attr-defined]
-        return q.get_sql(), params
+        sql = q.get_sql()
+
+        if self._conflict_columns:
+            conflict_cols = ", ".join(self._conflict_columns)
+            update_assignments = ", ".join(
+                f"{col} = EXCLUDED.{col}" for col in self._update_columns
+            )
+            # Strip trailing RETURNING * to insert the ON CONFLICT clause before it
+            returning_suffix = " RETURNING *"
+            if sql.endswith(returning_suffix):
+                sql = sql[: -len(returning_suffix)]
+            sql = (
+                f"{sql}"
+                f" ON CONFLICT ({conflict_cols})"
+                f" DO UPDATE SET {update_assignments}"
+                f"{returning_suffix}"
+            )
+
+        return sql, params
 
     async def fetch(self, conn: typing.Any) -> list[typing.Any]:
         assert self._model is not None

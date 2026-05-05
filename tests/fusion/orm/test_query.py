@@ -149,7 +149,7 @@ def test_select_where_is_not_null():
 
 def test_select_where_in_lookup():
     sql, params = Post.select().where(id__in=[1, 2, 3]).build()
-    assert sql == 'SELECT * FROM "posts" WHERE "id" IN $1'
+    assert sql == 'SELECT * FROM "posts" WHERE "id" = ANY($1)'
     assert params == [[1, 2, 3]]
 
 
@@ -1120,3 +1120,82 @@ def test_insert_query_bulk_values_sql_unchanged():
         'INSERT INTO "posts" ("user_id","title","body") VALUES ($1,$2,$3),($4,$5,$6) RETURNING *'
     )
     assert params == [1, "first", None, 2, "second", None]
+
+
+# ---------------------------------------------------------------------------
+# Cycle 6: InsertQuery.on_conflict() — upsert support
+# ---------------------------------------------------------------------------
+
+
+class UserRate(Model):
+    __schema__ = "billing"
+    id: int | None = None
+    user_id: int
+    workspace_id: int
+    rate: float
+    updated_at: str | None = None
+
+
+def test_on_conflict_builds_correct_sql():
+    """on_conflict() appends ON CONFLICT ... DO UPDATE SET ... to INSERT."""
+    sql, params = (
+        UserRate.insert()
+        .values(user_id=1, workspace_id=2, rate=150.0, updated_at="2024-01-01")
+        .on_conflict(["user_id", "workspace_id"], ["rate", "updated_at"])
+        .build()
+    )
+    assert sql == (
+        'INSERT INTO "billing"."user_rates" ("user_id","workspace_id","rate","updated_at")'
+        " VALUES ($1,$2,$3,$4)"
+        " ON CONFLICT (user_id, workspace_id)"
+        " DO UPDATE SET rate = EXCLUDED.rate, updated_at = EXCLUDED.updated_at"
+        " RETURNING *"
+    )
+    assert params == [1, 2, 150.0, "2024-01-01"]
+
+
+def test_on_conflict_returns_insert_query():
+    """on_conflict() must return an InsertQuery so .fetch() is available."""
+    result = Post.insert().values(user_id=1, title="hi").on_conflict(["user_id"], ["title"])
+    assert isinstance(result, InsertQuery)
+
+
+def test_on_conflict_single_conflict_column():
+    """on_conflict() works with a single conflict column."""
+    sql, params = (
+        Post.insert()
+        .values(user_id=1, title="hello")
+        .on_conflict(["user_id"], ["title"])
+        .build()
+    )
+    assert sql == (
+        'INSERT INTO "posts" ("user_id","title","body")'
+        " VALUES ($1,$2,$3)"
+        " ON CONFLICT (user_id)"
+        " DO UPDATE SET title = EXCLUDED.title"
+        " RETURNING *"
+    )
+    assert params == [1, "hello", None]
+
+
+@pytest.mark.asyncio
+async def test_on_conflict_fetch_executes_correct_sql():
+    """on_conflict().fetch(conn) calls conn.fetch with the upsert SQL."""
+    conn = AsyncMock()
+    row = {"id": 1, "user_id": 1, "workspace_id": 2, "rate": 150.0, "updated_at": "2024-01-01"}
+    record = MagicMock()
+    record.items = MagicMock(return_value=list(row.items()))
+    conn.fetch = AsyncMock(return_value=[record])
+
+    await (
+        UserRate.insert()
+        .values(user_id=1, workspace_id=2, rate=150.0, updated_at="2024-01-01")
+        .on_conflict(["user_id", "workspace_id"], ["rate", "updated_at"])
+        .fetch(conn)
+    )
+    conn.fetch.assert_called_once()
+    sql = conn.fetch.call_args[0][0]
+    assert "ON CONFLICT" in sql
+    assert "DO UPDATE SET" in sql
+    assert "EXCLUDED.rate" in sql
+    assert "EXCLUDED.updated_at" in sql
