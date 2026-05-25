@@ -1,8 +1,8 @@
 import re
 import typing
-
-if typing.TYPE_CHECKING:  # pragma: no cover
-    from .query import SelectQuery
+from .query import UpdateQuery, DeleteQuery, InsertQuery,SelectQuery
+# if typing.TYPE_CHECKING:  # pragma: no cover
+#     from .query import SelectQuery
 
 
 def _renumber_params(sql: str, offset: int) -> str:
@@ -43,12 +43,13 @@ class UnionQuery:
         # Return raw dicts — union queries may not map cleanly to a single model
         return [dict(r.items()) for r in records]
 
+type Query = SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | CTEQuery | UnionQuery
 
 class CTEQuery:
     def __init__(
         self,
-        main: SelectQuery,
-        ctes: dict[str, SelectQuery | UnionQuery],
+        main: Query,
+        ctes: dict[str, Query],
         *,
         recursive: bool = False,
     ) -> None:
@@ -84,9 +85,9 @@ def union(*queries: SelectQuery, all: bool = False) -> UnionQuery:
     return UnionQuery(list(queries), all=all)
 
 
-def cte(*, main: SelectQuery, **named_ctes: SelectQuery | UnionQuery) -> CTEQuery:
+def cte(*, main: SelectQuery, **named_ctes: Query) -> CTEQuery:
     return CTEQuery(main, named_ctes)
 
 
-def recursive_cte(*, main: SelectQuery, **named_ctes: SelectQuery | UnionQuery) -> CTEQuery:
+def recursive_cte(*, main: SelectQuery, **named_ctes: Query) -> CTEQuery:
     return CTEQuery(main, named_ctes, recursive=True)
