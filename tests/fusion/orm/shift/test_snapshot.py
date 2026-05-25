@@ -164,3 +164,49 @@ def test_unknown_python_type_defaults_to_text():
 
     pg_type = _resolve_pg_type(Misc, "data")
     assert pg_type == "TEXT"
+
+
+# ---------------------------------------------------------------------------
+# db_serial() sentinel — BIGSERIAL primary keys
+# ---------------------------------------------------------------------------
+
+
+def test_db_serial_sentinel_is_distinct_type():
+    """db_serial() returns a _DbSerial instance, distinct from other sentinels."""
+    from fusion.orm.fields import _DbSerial, db_serial
+
+    val = db_serial()
+    assert isinstance(val, _DbSerial)
+
+
+def test_db_serial_calls_return_same_singleton():
+    """db_serial() always returns the same singleton instance."""
+    from fusion.orm.fields import db_serial
+
+    assert db_serial() is db_serial()
+
+
+def test_bigserial_id_column_uses_bigserial_type():
+    """A model with id typed BIGSERIAL produces the correct snapshot type."""
+    from fusion.orm.fields import db_serial
+
+    class BigModel(Model):
+        id: int = field(db_type="BIGSERIAL", default=db_serial())
+
+    result = serialize([BigModel])
+    id_col = result["tables"]["big_models"]["columns"]["id"]
+    assert id_col["type"] == "BIGSERIAL"
+    assert id_col["primary_key"] is True
+    assert id_col["nullable"] is False
+
+
+def test_db_serial_default_not_emitted_as_sql_default():
+    """The _DbSerial sentinel does not produce a SQL DEFAULT expression (DB generates it)."""
+    from fusion.orm.fields import db_serial
+
+    class BigModel(Model):
+        id: int = field(db_type="BIGSERIAL", default=db_serial())
+
+    result = serialize([BigModel])
+    id_col = result["tables"]["big_models"]["columns"]["id"]
+    assert "default" not in id_col

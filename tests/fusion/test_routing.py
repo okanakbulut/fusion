@@ -23,7 +23,9 @@ from fusion import (
     Response,
     Route,
 )
+from fusion.router import MAX_PATH_DEPTH, TreeRouter
 from fusion.testing import TestClient
+from fusion.types import Method
 
 
 class _Msg(Object):
@@ -252,3 +254,151 @@ async def test_deeply_nested_static_path():
         assert (await c.get("/a/b/c")).status_code == 405
         # /a/b/x is not in the tree at all → 404
         assert (await c.get("/a/b/x")).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# TreeRouter.resolve() — pure routing without ASGI
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_static_path_returns_route():
+    router = TreeRouter([Get("/hello", handler=_EchoHandler)])
+    result = router.resolve("/hello", Method.GET)
+    assert result is not None
+    route, path_params = result
+    assert path_params == {}
+    assert route.path == "/hello"
+    assert route.method == Method.GET
+
+
+def test_resolve_returns_path_params():
+    router = TreeRouter([Get("/users/{id:int}", handler=_EchoHandler)])
+    result = router.resolve("/users/42", Method.GET)
+    assert result is not None
+    _, path_params = result
+    assert path_params == {"id": "42"}
+
+
+def test_resolve_multiple_path_params():
+    router = TreeRouter([Get("/a/{x}/b/{y}", handler=_EchoHandler)])
+    result = router.resolve("/a/foo/b/bar", Method.GET)
+    assert result is not None
+    _, path_params = result
+    assert path_params == {"x": "foo", "y": "bar"}
+
+
+def test_resolve_unknown_path_returns_none():
+    router = TreeRouter([Get("/hello", handler=_EchoHandler)])
+    assert router.resolve("/nope", Method.GET) is None
+
+
+def test_resolve_wrong_method_returns_none():
+    router = TreeRouter([Get("/hello", handler=_EchoHandler)])
+    assert router.resolve("/hello", Method.POST) is None
+
+
+def test_resolve_path_node_exists_but_no_method_returns_none():
+    router = TreeRouter([Get("/a/b/c/d", handler=_EchoHandler)])
+    # node /a/b/c exists in the tree but has no route for GET
+    assert router.resolve("/a/b/c", Method.GET) is None
+
+
+def test_resolve_exceeds_max_depth_returns_none():
+    router = TreeRouter([Get("/a", handler=_EchoHandler)])
+    deep = "/" + "/".join(["x"] * (MAX_PATH_DEPTH + 1))
+    assert router.resolve(deep, Method.GET) is None
+
+
+def test_resolve_root_path():
+    router = TreeRouter([Get("/", handler=_EchoHandler)])
+    result = router.resolve("/", Method.GET)
+    assert result is not None
+
+
+def test_resolve_uuid_param():
+    router = TreeRouter([Get("/items/{item_id:uuid}", handler=_EchoHandler)])
+    valid_uuid = "550e8400-e29b-41d4-a716-446655440000"
+    assert router.resolve(f"/items/{valid_uuid}", Method.GET) is not None
+    assert router.resolve("/items/not-a-uuid", Method.GET) is None
+
+
+# ---------------------------------------------------------------------------
+# pk constraint — regex validation + optional transform
+# ---------------------------------------------------------------------------
+
+
+def test_pk_pattern_accepts_valid_public_key():
+    """A segment matching `prefix-XXXX` (4+ suffix chars) is accepted."""
+    from fusion.router import type_patterns
+
+    pk_pattern = type_patterns["pk"]
+    assert pk_pattern.match("matter-AbCd")
+    assert pk_pattern.match("2024-0001-XXXX")
+    assert pk_pattern.match("org-abc123")
+
+
+def test_pk_pattern_rejects_no_suffix():
+    """A segment with no hyphen-separated suffix is rejected."""
+    from fusion.router import type_patterns
+
+    pk_pattern = type_patterns["pk"]
+    assert pk_pattern.match("nomatch") is None
+    assert pk_pattern.match("abc") is None
+
+
+def test_pk_pattern_rejects_short_suffix():
+    """A suffix shorter than 4 chars is rejected."""
+    from fusion.router import type_patterns
+
+    pk_pattern = type_patterns["pk"]
+    assert pk_pattern.match("matter-XY") is None
+    assert pk_pattern.match("matter-XYZ") is None
+
+
+def test_resolve_pk_param_returns_raw_string_without_transform():
+    """Without a registered transform, pk resolves to the raw string."""
+    router = TreeRouter([Get("/matters/{key:pk}", handler=_EchoHandler)])
+    result = router.resolve("/matters/2024-0001-ABCD", Method.GET)
+    assert result is not None
+    _, path_params = result
+    assert path_params == {"key": "2024-0001-ABCD"}
+
+
+def test_resolve_pk_param_rejects_invalid_format():
+    """A segment that doesn't match the pk pattern returns 404."""
+    router = TreeRouter([Get("/matters/{key:pk}", handler=_EchoHandler)])
+    assert router.resolve("/matters/notakey", Method.GET) is None
+    assert router.resolve("/matters/short-X", Method.GET) is None
+
+
+def test_resolve_pk_with_registered_transform_applies_it():
+    """A registered type_transforms['pk'] is applied to the matched segment."""
+    from fusion import router as router_module
+
+    original = router_module.type_transforms.copy()
+    try:
+        # Register a simple test transform: extract the suffix after the last '-'
+        router_module.type_transforms["pk"] = lambda s: int(s.split("-")[-1])
+        r = TreeRouter([Get("/matters/{key:pk}", handler=_EchoHandler)])
+        result = r.resolve("/matters/matter-1234", Method.GET)
+        assert result is not None
+        _, path_params = result
+        assert path_params == {"key": 1234}
+    finally:
+        router_module.type_transforms.clear()
+        router_module.type_transforms.update(original)
+
+
+def test_resolve_pk_transform_raises_returns_404():
+    """If the registered transform raises, the segment is treated as no match."""
+    from fusion import router as router_module
+
+    original = router_module.type_transforms.copy()
+    try:
+        router_module.type_transforms["pk"] = lambda s: (_ for _ in ()).throw(ValueError("bad"))
+        r = TreeRouter([Get("/matters/{key:pk}", handler=_EchoHandler)])
+        result = r.resolve("/matters/matter-ABCD", Method.GET)
+        assert result is None
+    finally:
+        router_module.type_transforms.clear()
+        router_module.type_transforms.update(original)

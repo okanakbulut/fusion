@@ -17,8 +17,13 @@ class _DbUuid:
     pass
 
 
+class _DbSerial:
+    pass
+
+
 _DB_NOW = _DbNow()
 _DB_UUID = _DbUuid()
+_DB_SERIAL = _DbSerial()
 
 
 def db_now() -> _DbNow:
@@ -27,6 +32,10 @@ def db_now() -> _DbNow:
 
 def db_uuid() -> _DbUuid:
     return _DB_UUID
+
+
+def db_serial() -> _DbSerial:
+    return _DB_SERIAL
 
 
 def field(

@@ -166,7 +166,16 @@ class AlterColumn:
         clauses: list[str] = []
 
         if self.type is not None:
-            clauses.append(f'ALTER COLUMN "{self.column}" TYPE {self.type}')
+            typ_for_alter = self.type
+            if isinstance(typ_for_alter, str):
+                tu = typ_for_alter.strip().upper()
+                if tu == "SERIAL":
+                    typ_for_alter = "INTEGER"
+                elif tu == "BIGSERIAL":
+                    typ_for_alter = "BIGINT"
+                elif tu == "SMALLSERIAL":
+                    typ_for_alter = "SMALLINT"
+            clauses.append(f'ALTER COLUMN "{self.column}" TYPE {typ_for_alter}')
         if self.nullable is False:
             clauses.append(f'ALTER COLUMN "{self.column}" SET NOT NULL')
         elif self.nullable is True:

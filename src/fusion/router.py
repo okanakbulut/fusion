@@ -1,23 +1,11 @@
-import logging
 import re
 import typing
 
 import msgspec
 
-_logger = logging.getLogger(__name__)
-
-from .context import Context
-from .exceptions import ValidationException
 from .protocols import HttpRequest
-from .responses import (
-    BadRequest,
-    InternalServerError,
-    MethodNotAllowed,
-    NotFound,
-    ValidationProblem,
-)
 from .route import Route
-from .types import Method, Receive, Scope, Send
+from .types import Method
 
 # regex to match path segments like "{path_param[:(int|uuid|/regex_pattern/)]}"
 segment_type_pattern = re.compile(r"^\{([a-zA-Z_][a-zA-Z0-9_]*)(?::(int|uuid|.+))?\}$")
@@ -27,7 +15,13 @@ type_patterns = {
     "uuid": re.compile(
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
     ),
+    "pk": re.compile(r"^.+-[a-zA-Z0-9]{4,}$"),
 }
+
+# Apps register transforms at startup, e.g.:
+#   type_transforms["pk"] = lambda s: parse_public_key(s)[1]
+# Fusion ships this empty — the framework itself does not register any transforms.
+type_transforms: dict[str, typing.Callable[[str], typing.Any]] = {}
 
 MAX_PATH_DEPTH = 50
 
@@ -37,24 +31,37 @@ class PathSegment(msgspec.Struct, frozen=True):
 
     name: str
     pattern: re.Pattern[str] | None
+    type_name: str | None = None
 
     @classmethod
     def create(cls, segment: str):
         name = segment
         pattern = None
+        type_name = None
         if match := segment_type_pattern.match(segment):
             name = match.group(1)
-            if match.group(2) is None:
+            constraint = match.group(2)
+            if constraint is None:
                 pattern = re.compile(r"^.+$")
             else:
-                pattern = type_patterns.get(match.group(2), re.compile(f"^{match.group(2)}$"))
+                pattern = type_patterns.get(constraint, re.compile(f"^{constraint}$"))
+                if constraint in type_patterns:
+                    type_name = constraint
 
-        return cls(name=name, pattern=pattern)
+        return cls(name=name, pattern=pattern, type_name=type_name)
 
     def match(self, segment: str) -> tuple[bool, str, typing.Any]:
         if self.pattern:
             if not self.pattern.match(segment):
                 return False, "", None
+
+            if self.type_name is not None:
+                transform = type_transforms.get(self.type_name)
+                if transform is not None:
+                    try:
+                        return True, self.name, transform(segment)
+                    except Exception:
+                        return False, "", None
 
             return True, self.name, segment
         return self.name == segment, "", None
@@ -95,44 +102,55 @@ class TreeRouter:
 
         current_node.routes[route.method] = route
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        async with Context(scope, receive, send) as ctx:
-            path_params: dict[str, typing.Any] = {}  # To store extracted path parameters
-            path_segments = ctx.path.strip("/").split("/")
+    def resolve(
+        self, path: str, method: Method
+    ) -> tuple[Route[typing.Any, typing.Any], dict[str, typing.Any]] | None:
+        """Return (route, path_params) for the given path and method, or None."""
+        path_params: dict[str, typing.Any] = {}
+        path_segments = path.strip("/").split("/")
 
-            if len(path_segments) > MAX_PATH_DEPTH:
-                return await NotFound(detail="Route not found")(scope, receive, send)
+        if len(path_segments) > MAX_PATH_DEPTH:
+            return None
 
-            current_node = self.root
+        current_node = self.root
 
-            for segment in path_segments:
-                matched_child = None
-                for path_segment, child_node in current_node.children.items():
-                    is_match, name, value = path_segment.match(segment)
-                    if is_match:
-                        matched_child = child_node
-                        if name:
-                            path_params[name] = value
+        for segment in path_segments:
+            matched_child = None
+            for path_segment, child_node in current_node.children.items():
+                is_match, name, value = path_segment.match(segment)
+                if is_match:
+                    matched_child = child_node
+                    if name:
+                        path_params[name] = value
+                    break
 
-                        break
+            if matched_child is None:
+                return None
 
-                if matched_child is None:
-                    return await NotFound(detail="Route not found")(scope, receive, send)
+            current_node = matched_child
 
-                current_node = matched_child
+        route = current_node.routes.get(method)
+        if route is None:
+            return None
 
-            # If we reached here, we found a matching route
-            if route := current_node.routes.get(Method(ctx.method)):
-                scope["path_params"] = path_params
-                try:
-                    request_class = route.get_request_class()
-                    request = await request_class.instance()
-                    response = await route.handle(request)
-                except ValidationException as exc:
-                    response = ValidationProblem(errors=exc.errors, detail=exc.detail)
-                except Exception:
-                    _logger.exception("Unhandled exception in route handler")
-                    response = InternalServerError()
-                return await response(scope, receive, send)
+        return route, path_params
 
-            return await MethodNotAllowed()(scope, receive, send)
+    def _has_path(self, path: str) -> bool:
+        """Return True if path traversal reaches a node in the tree (any method)."""
+        path_segments = path.strip("/").split("/")
+        current_node = self.root
+
+        for segment in path_segments:
+            matched_child = None
+            for path_segment, child_node in current_node.children.items():
+                is_match, _, _ = path_segment.match(segment)
+                if is_match:
+                    matched_child = child_node
+                    break
+
+            if matched_child is None:
+                return False
+
+            current_node = matched_child
+
+        return True

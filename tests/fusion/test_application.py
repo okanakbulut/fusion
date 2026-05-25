@@ -8,7 +8,8 @@ import contextlib
 
 import pytest
 
-from fusion import Fusion, Handler, Object, Request, Response, Route
+from fusion import Fusion, Handler, Injectable, Object, PathParam, Request, Response, Route
+from fusion.testing import TestClient
 
 
 class _Ok(Object):
@@ -192,6 +193,131 @@ async def test_lifespan_non_startup_first_message_is_ignored():
     await app(scope, receive, send)
 
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_calls_sub_handler_and_returns_response():
+    """dispatch() executes a registered route within the current context."""
+
+    class Inner(Object):
+        hit: bool
+
+    class InnerHandler(Handler):
+        async def handle(self, request: Request) -> Response[Inner]:
+            return Response(Inner(hit=True))
+
+    class _OuterRequest(Request):
+        pass
+
+    class OuterHandler(Handler):
+        async def handle(self, request: _OuterRequest) -> Response[_Ok]:
+            from fusion.context import context as ctx_var
+
+            app: Fusion = ctx_var.get().scope["app"]
+            result = await app.dispatch("/inner", "GET")
+            assert result is not None
+            assert result.content.hit is True  # type: ignore[union-attr]
+            return Response(_Ok(ok=True))
+
+    app = Fusion(
+        routes=[
+            Route("/inner", methods=["GET"], handler=InnerHandler),
+            Route("/outer", methods=["GET"], handler=OuterHandler),
+        ]
+    )
+
+    async with TestClient(app) as c:
+        r = await c.get("/outer")
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_dispatch_with_path_params():
+    """dispatch() extracts path params from path and passes them to the handler."""
+
+    class Item(Object):
+        item_id: str
+
+    from fusion import PathParam
+
+    class ItemRequest(Injectable):
+        item_id: PathParam[str]
+
+    class ItemHandler(Handler):
+        req: ItemRequest
+
+        async def handle(self, request: Request) -> Response[Item]:
+            return Response(Item(item_id=self.req.item_id))
+
+    class _OuterRequest(Request):
+        pass
+
+    captured: list = []
+
+    class OuterHandler(Handler):
+        async def handle(self, request: _OuterRequest) -> Response[_Ok]:
+            from fusion.context import context as ctx_var
+
+            app: Fusion = ctx_var.get().scope["app"]
+            result = await app.dispatch("/items/abc-123", "GET")
+            captured.append(result)
+            return Response(_Ok(ok=True))
+
+    app = Fusion(
+        routes=[
+            Route("/items/{item_id}", methods=["GET"], handler=ItemHandler),
+            Route("/outer", methods=["GET"], handler=OuterHandler),
+        ]
+    )
+
+    async with TestClient(app) as c:
+        await c.get("/outer")
+
+    assert captured[0].content.item_id == "abc-123"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_returns_none_for_unknown_path():
+    """dispatch() returns None when no route matches."""
+
+    class _OuterRequest(Request):
+        pass
+
+    class OuterHandler(Handler):
+        async def handle(self, request: _OuterRequest) -> Response[_Ok]:
+            from fusion.context import context as ctx_var
+
+            app: Fusion = ctx_var.get().scope["app"]
+            result = await app.dispatch("/nonexistent", "GET")
+            assert result is None
+            return Response(_Ok(ok=True))
+
+    app = Fusion(routes=[Route("/outer", methods=["GET"], handler=OuterHandler)])
+
+    async with TestClient(app) as c:
+        r = await c.get("/outer")
+    assert r.status_code == 200
+
+
+def test_fusion_resolve_returns_route_and_path_params():
+    from fusion.types import Method
+
+    app = Fusion(routes=[Route("/items/{id}", methods=["GET"], handler=_OkHandler)])
+    result = app.resolve("/items/42", Method.GET)
+    assert result is not None
+    route, path_params = result
+    assert path_params == {"id": "42"}
+
+
+def test_fusion_resolve_accepts_string_method():
+    app = Fusion(routes=[Route("/ping", methods=["GET"], handler=_OkHandler)])
+    assert app.resolve("/ping", "GET") is not None
+    assert app.resolve("/ping", "get") is not None
+
+
+def test_fusion_resolve_unknown_path_returns_none():
+    app = Fusion(routes=[Route("/ping", methods=["GET"], handler=_OkHandler)])
+    assert app.resolve("/nope", "GET") is None
 
 
 @pytest.mark.asyncio

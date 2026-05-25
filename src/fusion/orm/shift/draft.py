@@ -25,6 +25,28 @@ from fusion.orm.shift.operations import (
 from fusion.orm.shift.state import ColumnState, SchemaState, TableState
 
 
+def _normalize_serial_like(typ: str) -> str:
+    """Normalize SERIAL/BIGSERIAL/SMALLSERIAL (and array variants) to integer types.
+
+    This keeps migration diffs from oscillating between SERIAL pseudo-types
+    and their underlying integer types (which PostgreSQL uses for ALTERs).
+    """
+    if not isinstance(typ, str):
+        return typ
+    is_array = typ.endswith("[]")
+    base = typ[:-2] if is_array else typ
+    u = base.strip().upper()
+    if u == "SERIAL":
+        mapped = "INTEGER"
+    elif u == "BIGSERIAL":
+        mapped = "BIGINT"
+    elif u == "SMALLSERIAL":
+        mapped = "SMALLINT"
+    else:
+        mapped = base
+    return f"{mapped}[]" if is_array else mapped
+
+
 def models_to_schema_state(models: list[type[Model]]) -> SchemaState:
     from fusion.orm.shift.snapshot import serialize
 
@@ -43,8 +65,9 @@ def models_to_schema_state(models: list[type[Model]]) -> SchemaState:
 
         cols: dict[str, ColumnState] = {}
         for col_name, col_def in table_def["columns"].items():
+            col_type = col_def["type"]
             cols[col_name] = ColumnState(
-                type=col_def["type"],
+                type=col_type,
                 nullable=col_def.get("nullable", True),
                 default=col_def.get("default"),
                 primary_key=col_def.get("primary_key", False),
@@ -82,6 +105,11 @@ def models_to_schema_state(models: list[type[Model]]) -> SchemaState:
 
 def diff_states(current: SchemaState, target: SchemaState) -> list[Any]:  # noqa: C901
     ops: list[Any] = []
+
+    def _norm_type_for_compare(t: Any) -> Any:
+        if not isinstance(t, str):
+            return t
+        return _normalize_serial_like(t)
 
     for ext in sorted(target.extensions - current.extensions):
         ops.append(AddExtension(ext))
@@ -148,7 +176,7 @@ def diff_states(current: SchemaState, target: SchemaState) -> list[Any]:  # noqa
             cc = ct.columns[col]
             tc = tt.columns[col]
             kwargs: dict[str, Any] = {}
-            if cc.type != tc.type:
+            if _norm_type_for_compare(cc.type) != _norm_type_for_compare(tc.type):
                 kwargs["type"] = tc.type
             if cc.nullable != tc.nullable:
                 kwargs["nullable"] = tc.nullable
