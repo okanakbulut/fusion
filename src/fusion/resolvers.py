@@ -6,7 +6,7 @@ import msgspec
 
 from .context import Context, context
 from .exceptions import ValidationException
-from .object import Object
+from .object import MetaObject, Object
 from .responses import FieldError
 
 T = typing.TypeVar("T")
@@ -92,7 +92,10 @@ class RequestBodyResolver(Resolver):
         """Resolve the request body from the request context."""
         body = await self.context.body()
 
-        if not (isinstance(self.typ, type) and issubclass(self.typ, msgspec.Struct)):
+        is_struct = isinstance(self.typ, type) and (
+            issubclass(self.typ, msgspec.Struct) or isinstance(self.typ, MetaObject)
+        )
+        if not is_struct:
             return self.name, msgspec.json.decode(body, type=self.typ, strict=True)
 
         try:

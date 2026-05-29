@@ -1,5 +1,5 @@
+import annotationlib
 import enum
-import sys
 import typing
 
 import msgspec
@@ -71,26 +71,37 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
         namespace: dict[str, typing.Any],
         **kwargs: typing.Any,
     ) -> type:
-        tmp_class = super().__new__(cls, name, bases, namespace, **kwargs)
-        try:
-            annotations = typing.get_type_hints(
-                tmp_class, globalns=sys.modules[tmp_class.__module__].__dict__
-            )
-        except Exception:
-            annotations = tmp_class.__annotations__
+        # Python 3.14 (PEP 649): annotations are stored as __annotate__ callable in the
+        # namespace, not as a dict. Call it with Format.VALUE to get own resolved annotations
+        # before super().__new__, so we need only a single call (avoiding the double-call
+        # pattern that polluted msgspec's internal per-class-name state for inherited defaults).
+        annotate_func = namespace.get("__annotate_func__")
+        if annotate_func is not None:
+            try:
+                own_annotations: dict[str, typing.Any] = annotate_func(
+                    annotationlib.Format.VALUE
+                )
+            except Exception:
+                own_annotations = dict(namespace.get("__annotations__", {}))
+        else:
+            own_annotations = dict(namespace.get("__annotations__", {}))
 
         fields: dict[str, Field] = {}
-        for key, annotation in annotations.items():
-            # ignore ClassVar fields
+        own_resolved: dict[str, typing.Any] = {}
+
+        for key, annotation in own_annotations.items():
             if typing.get_origin(annotation) is typing.ClassVar:
+                own_resolved[key] = annotation
                 continue
 
-            field_info = namespace.get(key)
-            if isinstance(field_info, Field):
+            field_info = namespace.get(key, NODEFAULT)
+            if field_info is NODEFAULT:
+                fields[key] = Field()
+                own_resolved[key] = annotation
+            elif isinstance(field_info, Field):
                 fields[key] = field_info
-                namespace.pop(key)  # remove Field instance from namespace
+                namespace.pop(key)
 
-                # constraints for msgspec
                 constraints: dict[str, typing.Any] = {}
                 if field_info.ge is not None:
                     constraints["ge"] = field_info.ge
@@ -107,13 +118,12 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
                 if field_info.pattern is not None:
                     constraints["pattern"] = field_info.pattern
 
-                # Apply constraints to the annotation
                 if constraints:
-                    # Use msgspec.Meta to add validation
-                    constrained_annotation = typing.Annotated[
+                    own_resolved[key] = typing.Annotated[
                         annotation, msgspec.Meta(**constraints)
                     ]
-                    annotations[key] = constrained_annotation
+                else:
+                    own_resolved[key] = annotation
 
                 if field_info.default is not NODEFAULT:
                     namespace[key] = msgspec.field(
@@ -127,10 +137,14 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
                     )
             else:
                 fields[key] = Field(default=field_info)
-        namespace["__annotations__"] = annotations
+                own_resolved[key] = annotation
+
+        namespace["__annotations__"] = own_resolved
+        if "__annotate_func__" in namespace:
+            del namespace["__annotate_func__"]
         namespace["__fields__"] = fields
         return super().__new__(cls, name, bases, namespace, **kwargs)
 
 
-class Object(metaclass=MetaObject):
+class Object(metaclass=MetaObject, kw_only=True):
     __fields__: typing.ClassVar[dict[str, Field]]

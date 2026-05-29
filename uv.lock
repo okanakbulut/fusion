@@ -759,7 +759,7 @@ wheels = [
 [[package]]
 name = "typedprotocol"
 version = "0.1.0"
-source = { git = "https://github.com/okanakbulut/typedprotocol.git?rev=main#c819b6ae16e6613ccd1e9c14b6b6c0a9a4594450" }
+source = { git = "https://github.com/okanakbulut/typedprotocol.git?rev=main#973918752d3fc5d9e6c8054b5232982d57ff635d" }
 dependencies = [
     { name = "typing-extensions" },
 ]

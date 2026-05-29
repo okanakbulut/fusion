@@ -2,12 +2,13 @@ import typing
 
 from .object import Object
 from .protocols import HttpHandler, HttpMiddleware, HttpRequest, HttpResponse
+from .request import Request
 
 
 class BaseMiddleware(Object):
     app: HttpHandler
 
-    async def handle(self, request: HttpRequest) -> HttpResponse:
+    async def handle(self, request: Request) -> HttpResponse:
         """Handle ASGI requests."""
         return await self.app.handle(request)
 

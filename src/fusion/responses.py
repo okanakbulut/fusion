@@ -2,11 +2,13 @@ import typing
 
 import msgspec
 
+from .object import Object
+from .types import Scope, Send, Receive
 
-class Object(msgspec.Struct, gc=False): ...
+T = typing.TypeVar("T", bound=Object)
 
 
-class Response[T: Object](Object):
+class Response(Object, typing.Generic[T]):
     encoder: typing.ClassVar[msgspec.json.Encoder] = msgspec.json.Encoder()
     status_code: typing.ClassVar[int] = 200
     content: T | str | None = None
@@ -35,11 +37,11 @@ class Response[T: Object](Object):
         await send({"type": "http.response.body", "body": body})
 
 
-class Created(Response):
+class Created(Response[T]):
     status_code: typing.ClassVar[int] = 201
 
 
-class NoContent(Response):
+class NoContent(Response[T]):
     status_code: typing.ClassVar[int] = 204
 
     async def __call__(self, scope, receive, send) -> None:
@@ -74,7 +76,7 @@ class Problem(Object, omit_defaults=True):
             instance=self.instance,
         )
 
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope:Scope, receive:Receive, send:Send) -> None:
         body = self.encoder.encode(self.body)
         headers = [
             (b"content-type", b"application/problem+json"),

@@ -33,9 +33,7 @@ class HttpConnection(TypedProtocol):
 
 
 class HttpResponse(TypedProtocol):
-    async def __call__(  # pragma: no cover
-        self, scope: Scope, receive: Receive, send: Send
-    ) -> None: ...
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None: ...
 
 
 class HttpRequest(Injectable):
