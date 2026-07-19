@@ -1,3 +1,4 @@
+import enum
 import typing
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
@@ -13,6 +14,16 @@ T = typing.TypeVar("T")
 type Constructor[T] = typing.Callable[[], typing.Awaitable[T] | AbstractAsyncContextManager[T]]
 
 __factories__: dict[type[typing.Any], Constructor[typing.Any]] = {}
+
+
+class _Missing(enum.Enum):
+    MISSING = enum.auto()
+
+
+MISSING = _Missing.MISSING
+"""Sentinel returned by a resolver when its value is absent from the request,
+so ``Request.instance()`` can omit the kwarg entirely and let the struct's own
+field default apply, instead of forcing a conversion of ``None``."""
 
 
 def has_factory(typ: type[typing.Any]) -> bool:
@@ -68,7 +79,9 @@ class QueryParamResolver(Resolver):
 
     async def resolve(self) -> tuple[str, typing.Any]:
         """Resolve the query parameter from the request context."""
-        value = self.context.query_params.get(self.name, None)
+        if self.name not in self.context.query_params:
+            return self.name, MISSING
+        value = self.context.query_params[self.name]
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 

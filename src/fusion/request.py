@@ -6,6 +6,7 @@ from .annotations import Cookie, Header, PathParam, QueryParam, RequestBody
 from .context import context
 from .exceptions import ValidationException
 from .injectable import Injectable
+from .resolvers import MISSING
 from .responses import FieldError
 from .types import Receive, Scope, Send
 
@@ -75,7 +76,8 @@ class Request(Injectable):
         for resolver in cls.__resolvers__.values():
             try:
                 name, value = await resolver.resolve()
-                params[name] = value
+                if value is not MISSING:
+                    params[name] = value
             except ValidationException as exc:
                 if exc.errors:
                     errors.extend(exc.errors)

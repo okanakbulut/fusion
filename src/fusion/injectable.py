@@ -2,6 +2,7 @@ import sys
 import typing
 
 from .object import Object
+from .resolvers import MISSING
 
 
 class Injectable(Object):
@@ -58,5 +59,6 @@ class Injectable(Object):
         params: dict[str, typing.Any] = {}
         for resolver in cls.__resolvers__.values():
             name, value = await resolver.resolve()
-            params[name] = value
+            if value is not MISSING:
+                params[name] = value
         return cls(**params)

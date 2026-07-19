@@ -126,6 +126,30 @@ async def test_query_param_url_encoded_value():
 
 
 @pytest.mark.asyncio
+async def test_omitted_bool_query_param_uses_default_instead_of_erroring():
+    class Output(Object):
+        flag: bool
+
+    class Input(Request):
+        flag: QueryParam[bool] = False
+
+    class FlagHandler(Handler):
+        async def handle(self, request: Input) -> Response[Output]:
+            return Response(Output(flag=request.flag))
+
+    app = Fusion(routes=[Route(path="/flag", methods=["GET"], handler=FlagHandler)])
+
+    async with TestClient(app) as client:
+        omitted = await client.get("/flag")
+        assert omitted.status_code == 200
+        assert omitted.json() == {"flag": False}
+
+        explicit = await client.get("/flag?flag=true")
+        assert explicit.status_code == 200
+        assert explicit.json() == {"flag": True}
+
+
+@pytest.mark.asyncio
 async def test_query_params_parsed_from_context():
     sent: list = []
 
