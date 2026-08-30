@@ -129,7 +129,8 @@ class RequestBodyResolver(Resolver):
         field_errors: list[FieldError] = []
         params: dict[str, typing.Any] = {}
 
-        for field in msgspec.structs.fields(self.typ):
+        struct_type = typing.cast(type[msgspec.Struct], self.typ)
+        for field in msgspec.structs.fields(struct_type):
             if field.encode_name in raw:
                 try:
                     params[field.name] = msgspec.convert(

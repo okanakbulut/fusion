@@ -214,3 +214,32 @@ async def test_request_body_size_exceeded_detail_collected_as_field_error():
         )
 
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_validation_report_fills_omitted_fields_from_their_defaults():
+    """When one field fails validation, omitted fields still take their declared default."""
+
+    class Profile(Object):
+        name: str
+        age: int = 30
+
+    class ProfileRequest(Injectable):
+        body: RequestBody[Profile]
+
+    class ProfileHandler(Handler):
+        data: ProfileRequest
+
+        async def handle(self, request: Request) -> Response[Profile]:
+            return Response(self.data.body)
+
+    app = Fusion(routes=[Route("/profiles", methods=["POST"], handler=ProfileHandler)])
+
+    async with TestClient(app) as client:
+        # `name` is the wrong type and `age` is omitted — the resolver rebuilds the
+        # struct to report per-field errors, taking `age` from its default.
+        response = await client.post("/profiles", json={"name": 123})
+
+    assert response.status_code == 400
+    problem = response.json()
+    assert [e["field"] for e in problem["errors"]] == ["name"]

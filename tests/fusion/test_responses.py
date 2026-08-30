@@ -101,6 +101,18 @@ async def test_no_content_sends_empty_body():
     assert "content-length" not in headers
 
 
+@pytest.mark.asyncio
+async def test_no_content_emits_custom_headers():
+    """204 carries no body, but custom headers still reach the wire."""
+    status, headers, body = await _call(
+        NoContent(headers={"location": "/things/1", "x-trace": "abc"})
+    )
+    assert status == 204
+    assert body == b""
+    assert headers["location"] == "/things/1"
+    assert headers["x-trace"] == "abc"
+
+
 # ---------------------------------------------------------------------------
 # Problem (RFC-9457)
 # ---------------------------------------------------------------------------

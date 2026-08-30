@@ -52,12 +52,17 @@ class Route[TRequest: HttpRequest, TResponse: HttpResponse]:
         self.path = path
         self.method = selected_method
         self._request_class = typing.get_type_hints(handler.handle).get("request", HttpRequest)
+        # TypedProtocol supports runtime subclass checks, but it is not a typing.Protocol
+        # that a type checker can treat as @runtime_checkable.
+        injectable = typing.cast(type, Injectable)
         wrapper_cls = (
-            InjectableHandlerWrapper if issubclass(handler, Injectable) else HandlerWrapper
+            InjectableHandlerWrapper if issubclass(handler, injectable) else HandlerWrapper
         )
         self.handler = typing.cast("HttpHandler[TRequest, TResponse]", wrapper_cls(Handler=handler))
         for middleware in reversed(middlewares or []):
-            self.handler = middleware.cls(self.handler, *middleware.args, **middleware.kwargs)
+            # middleware.cls is a TypedProtocol subclass, so its __init__ signature is opaque.
+            middleware_cls = typing.cast(typing.Callable[..., typing.Any], middleware.cls)
+            self.handler = middleware_cls(self.handler, *middleware.args, **middleware.kwargs)
 
     async def handle(self, request: TRequest) -> TResponse:
         """Handle ASGI requests."""

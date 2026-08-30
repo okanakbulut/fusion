@@ -10,9 +10,7 @@ authors = [
 ]
 dependencies = [
  "msgspec>=0.21.1",
- "pypika>=0.51.1",
  "typedprotocol>=0.1.0",
- "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -56,7 +54,6 @@ extend-ignore = ["F401", "S101", "RUF012", "UP047"]
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]
 "**/tests/**" = ["D101", "D102", "D103", "F", "E501", "S", "B"]
-"**/tests/sql/**" = ["E501"]
 
 
 [tool.ruff.lint.pydocstyle]
@@ -79,14 +76,10 @@ major_version_zero = true
 addopts = [
     "--import-mode=importlib",
     "--doctest-modules",
-    "--doctest-glob=docs/*.md",
     "--quiet",
     "--tb=long",
 ]
-testpaths = ["tests", "src/fusion", "docs"]
-markers = [
-    "integration: marks tests as integration tests (require Docker)",
-]
+testpaths = ["tests", "src/fusion"]
 
 [tool.coverage.run]
 branch = true
@@ -117,8 +110,3 @@ exclude = ["**/__init__.py", "**/__pycache__"]
 
 [tool.uv.sources]
 typedprotocol = { git = "https://github.com/okanakbulut/typedprotocol.git", rev = "main" }
-
-[dependency-groups]
-dev = [
-    "asyncpg>=0.31.0",
-]

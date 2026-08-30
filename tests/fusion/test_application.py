@@ -305,7 +305,7 @@ def test_fusion_resolve_returns_route_and_path_params():
     app = Fusion(routes=[Route("/items/{id}", methods=["GET"], handler=_OkHandler)])
     result = app.resolve("/items/42", Method.GET)
     assert result is not None
-    route, path_params = result
+    _route, path_params = result
     assert path_params == {"id": "42"}
 
 

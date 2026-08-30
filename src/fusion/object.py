@@ -62,6 +62,18 @@ def field(
     )
 
 
+_CONSTRAINT_ATTRS = ("ge", "gt", "le", "lt", "min_length", "max_length", "pattern")
+
+
+def _constraints_of(field_info: Field) -> dict[str, typing.Any]:
+    """Collect the msgspec.Meta constraints declared on a Field, in declaration order."""
+    return {
+        attr: value
+        for attr in _CONSTRAINT_ATTRS
+        if (value := getattr(field_info, attr)) is not None
+    }
+
+
 @typing.dataclass_transform(field_specifiers=(field,))
 class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
     def __new__(
@@ -78,9 +90,7 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
         annotate_func = namespace.get("__annotate_func__")
         if annotate_func is not None:
             try:
-                own_annotations: dict[str, typing.Any] = annotate_func(
-                    annotationlib.Format.VALUE
-                )
+                own_annotations: dict[str, typing.Any] = annotate_func(annotationlib.Format.VALUE)
             except Exception:
                 own_annotations = dict(namespace.get("__annotations__", {}))
         else:
@@ -102,26 +112,9 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
                 fields[key] = field_info
                 namespace.pop(key)
 
-                constraints: dict[str, typing.Any] = {}
-                if field_info.ge is not None:
-                    constraints["ge"] = field_info.ge
-                if field_info.gt is not None:
-                    constraints["gt"] = field_info.gt
-                if field_info.le is not None:
-                    constraints["le"] = field_info.le
-                if field_info.lt is not None:
-                    constraints["lt"] = field_info.lt
-                if field_info.min_length is not None:
-                    constraints["min_length"] = field_info.min_length
-                if field_info.max_length is not None:
-                    constraints["max_length"] = field_info.max_length
-                if field_info.pattern is not None:
-                    constraints["pattern"] = field_info.pattern
-
+                constraints = _constraints_of(field_info)
                 if constraints:
-                    own_resolved[key] = typing.Annotated[
-                        annotation, msgspec.Meta(**constraints)
-                    ]
+                    own_resolved[key] = typing.Annotated[annotation, msgspec.Meta(**constraints)]
                 else:
                     own_resolved[key] = annotation
 
@@ -140,8 +133,7 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
                 own_resolved[key] = annotation
 
         namespace["__annotations__"] = own_resolved
-        if "__annotate_func__" in namespace:
-            del namespace["__annotate_func__"]
+        namespace.pop("__annotate_func__", None)
         namespace["__fields__"] = fields
         return super().__new__(cls, name, bases, namespace, **kwargs)
 

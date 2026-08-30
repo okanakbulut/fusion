@@ -245,6 +245,20 @@ def test_route_with_non_injectable_handler():
 
 
 @pytest.mark.asyncio
+async def test_non_injectable_handler_is_invoked_through_wrapper():
+    """HandlerWrapper instantiates a plain handler per call and delegates to it."""
+    from fusion.protocols import HttpRequest, HttpResponse
+
+    class PlainHandler:
+        async def handle(self, request: HttpRequest) -> HttpResponse:
+            return Response(None)
+
+    r = Route("/plain", handler=PlainHandler, method="GET")
+    result = await r.handle(None)  # type: ignore[arg-type]
+    assert isinstance(result, Response)
+
+
+@pytest.mark.asyncio
 async def test_deeply_nested_static_path():
     app = _app(Route("/a/b/c/d", methods=["GET"], handler=_EchoHandler))
 

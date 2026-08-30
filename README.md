@@ -3,7 +3,7 @@
 > A modern, async-first ASGI web framework for Python with type-safe dependency injection.
 
 [![PyPI](https://img.shields.io/pypi/v/fusion)](https://pypi.org/project/fusion/)
-[![Python](https://img.shields.io/badge/python-3.12%20|%203.13%20|%203.14-blue)](https://www.python.org)
+[![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org)
 [![CI](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/okanakbulut/fusion/main/coverage.svg)](https://github.com/okanakbulut/fusion/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
@@ -22,7 +22,7 @@ Fusion is a lightweight ASGI web framework built on two pillars:
 - **[msgspec](https://github.com/jcrist/msgspec)** — high-performance JSON serialization and validation
 - **Type-hint-driven DI** — declare dependencies as annotated fields; Fusion resolves them automatically at request time
 
-It is designed for Python 3.12+ and is async-first throughout.
+It is designed for Python 3.14+ and is async-first throughout.
 
 ---
 
@@ -326,30 +326,7 @@ return OutOfStockProblem(detail="Item #42 is out of stock")
 
 ## CLI
 
-Fusion ships a `fusion` command for schema management and serving.
-
-### Schema management
-
-```bash
-# Snapshot a single module, a whole package, or multiple modules at once
-fusion snapshot myapp.models
-fusion snapshot myapp                          # walks the package recursively
-fusion snapshot myapp.models myapp.auth.models
-
-# Check for drift — exits 1 on changes, safe as a pre-commit hook
-fusion check myapp
-
-# Apply pending DDL to Postgres
-fusion migrate myapp --dsn postgresql://user:pass@host/db
-
-# Use POSTGRES_DSN env var instead of --dsn
-POSTGRES_DSN=postgresql://user:pass@host/db fusion migrate myapp
-
-# Allow DROP TABLE / DROP COLUMN
-fusion migrate myapp --dsn postgresql://... --drop
-```
-
-All three commands accept one or more module/package arguments and `--snapshot <path>` to override the default `migrations/snapshot.yaml` location.
+Fusion ships a `fusion` command for serving your application.
 
 ### Running the server
 
@@ -365,7 +342,7 @@ fusion serve myapp:app --host 127.0.0.1 --port 9000 --reload
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.14+
 - `msgspec >= 0.21.1`
 - `typedprotocol >= 0.1.0`
 

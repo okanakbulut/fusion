@@ -230,3 +230,22 @@ def test_metaclass_fallback_on_type_hints_failure():
             sys.modules.pop("fusion_test_sentinel", None)
         else:
             sys.modules["fusion_test_sentinel"] = original
+
+
+def test_metaclass_falls_back_when_annotate_func_raises():
+    """PEP 649: if __annotate_func__ cannot resolve, fall back to raw __annotations__."""
+    from fusion.object import MetaObject
+
+    def exploding_annotate(fmt):
+        raise NameError("name 'Unresolvable' is not defined")
+
+    namespace = {
+        "__module__": __name__,
+        "__qualname__": "Exploding",
+        "__annotate_func__": exploding_annotate,
+        "__annotations__": {"value": int},
+    }
+    Exploding = MetaObject("Exploding", (Object,), namespace)
+
+    assert "value" in Exploding.__annotations__
+    assert Exploding(value=7).value == 7
