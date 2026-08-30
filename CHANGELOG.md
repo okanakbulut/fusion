@@ -1,3 +1,10 @@
+## v0.11.0 (2026-08-30)
+
+### BREAKING CHANGE
+
+- fusion.orm is removed. Applications that imported it
+must supply their own query builder.
+
 ## v0.10.0 (2026-08-30)
 
 ### Feat
