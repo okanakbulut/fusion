@@ -1,3 +1,20 @@
+## v0.10.0 (2026-08-30)
+
+### Feat
+
+- **orm**: add on_conflict() upsert support and fix __in to use ANY()
+- **orm**: replace migration system with shift-based schema evolution
+
+### Fix
+
+- fall back to struct default when a QueryParam is omitted
+- Python 3.14 / PEP 649 compatibility for MetaObject annotation resolution
+
+### Refactor
+
+- remove orm/shift subsystem; add packaging build dep
+- extract routing resolution, add dispatch, SERIAL type normalization
+
 ## v0.9.0 (2026-04-30)
 
 ### Feat
