@@ -1,364 +1,497 @@
-"""Tests for Fusion application lifecycle (lifespan) and ASGI dispatch.
-
-These tests show how the app initialises shared state, what happens when
-startup fails, and how requests flow through to the router.
-"""
-
+import asyncio
 import contextlib
+import json
+import typing
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 
-from fusion import Fusion, Handler, Injectable, Object, PathParam, Request, Response, Route
-from fusion.testing import TestClient
+from fusion import (
+    Auth,
+    Fusion,
+    Get,
+    Http,
+    Inject,
+    Object,
+    Post,
+    Request,
+    Response,
+    factory,
+    requires,
+)
+from fusion.annotations import FromContext
+from fusion.application import default_lifespan
+from fusion.testing import LifespanManager, TestClient
+from fusion.types import Method
+
+from .conftest import client_for
 
 
-class _Ok(Object):
-    ok: bool
+class Out(Object):
+    value: typing.Any
 
 
-class _OkHandler(Handler):
-    async def handle(self, request: Request) -> Response[_Ok]:
-        return Response(_Ok(ok=True))
+async def _echo() -> Response[Out]:
+    return Response(Out(value="ok"))
 
 
-async def _send_events(app, events):
-    """Drive ASGI lifespan manually through the given event sequence."""
-    sent: list[dict] = []
-
-    async def receive():
-        return events.pop(0)
-
-    async def send(msg):
-        sent.append(msg)
-
-    scope = {"type": "lifespan", "state": {}}
-    await app(scope, receive, send)
-    return scope, sent
+# --- lifespan ----------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_lifespan_startup_and_shutdown():
-    startup_ran = shutdown_ran = False
+    events: list[str] = []
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
-        nonlocal startup_ran, shutdown_ran
-        startup_ran = True
-        yield {"db": "mock"}
-        shutdown_ran = True
+        events.append("startup")
+        yield {"ready": True}
+        events.append("shutdown")
+
+    app = Fusion(routes=[Get("/x", _echo)], lifespan=lifespan)
+    async with LifespanManager(app) as manager:
+        assert manager.state == {"ready": True}
+
+    assert events == ["startup", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_startup_failure_is_reported():
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        raise RuntimeError("nope")
+        yield {}  # pragma: no cover
 
     app = Fusion(routes=[], lifespan=lifespan)
-    events = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
-    scope, sent = await _send_events(app, events)
-
-    assert startup_ran
-    assert shutdown_ran
-    assert scope["state"]["db"] == "mock"
-    assert sent[0]["type"] == "lifespan.startup.complete"
-    assert sent[1]["type"] == "lifespan.shutdown.complete"
+    with pytest.raises(RuntimeError):
+        async with LifespanManager(app):
+            pass  # pragma: no cover
 
 
 @pytest.mark.asyncio
-async def test_lifespan_startup_failure_sends_failed_message():
+async def test_lifespan_must_yield_a_dict():
     @contextlib.asynccontextmanager
-    async def broken_lifespan(app):
-        raise RuntimeError("db down")
-        yield {}  # type: ignore[misc]
-
-    app = Fusion(routes=[], lifespan=broken_lifespan)
-    events = [{"type": "lifespan.startup"}]
-
-    sent: list[dict] = []
-
-    async def receive():
-        return events.pop(0)
-
-    async def send(msg):
-        sent.append(msg)
-
-    scope = {"type": "lifespan", "state": {}}
-    with pytest.raises(RuntimeError, match="db down"):
-        await app(scope, receive, send)
-
-    assert sent[0]["type"] == "lifespan.startup.failed"
-    assert "db down" in sent[0]["message"]
-
-
-@pytest.mark.asyncio
-async def test_lifespan_non_dict_state_raises():
-    @contextlib.asynccontextmanager
-    async def bad_lifespan(app):
+    async def lifespan(app):
         yield "not a dict"
 
-    app = Fusion(routes=[], lifespan=bad_lifespan)
-    events = [{"type": "lifespan.startup"}]
-
-    sent: list[dict] = []
-
-    async def receive():
-        return events.pop(0)
-
-    async def send(msg):
-        sent.append(msg)
-
-    scope = {"type": "lifespan", "state": {}}
-    with pytest.raises(TypeError, match="dict"):
-        await app(scope, receive, send)
-
-    assert sent[0]["type"] == "lifespan.startup.failed"
+    app = Fusion(routes=[], lifespan=lifespan)
+    with pytest.raises(RuntimeError):
+        async with LifespanManager(app):
+            pass  # pragma: no cover
 
 
 @pytest.mark.asyncio
-async def test_lifespan_none_state_is_allowed():
+async def test_lifespan_may_yield_none():
     @contextlib.asynccontextmanager
-    async def none_lifespan(app):
+    async def lifespan(app):
         yield None
 
-    app = Fusion(routes=[], lifespan=none_lifespan)
-    events = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
-    _scope, sent = await _send_events(app, events)
-
-    assert sent[0]["type"] == "lifespan.startup.complete"
-
-
-@pytest.mark.asyncio
-async def test_app_sets_scope_app_ref():
-    captured: list[dict] = []
-
-    class ScopeCapturingHandler(Handler):
-        async def handle(self, request: Request) -> Response[_Ok]:
-            from fusion.context import context as ctx_var
-
-            captured.append(dict(ctx_var.get().scope))
-            return Response(_Ok(ok=True))
-
-    import httpx
-
-    app = Fusion(routes=[Route("/", methods=["GET"], handler=ScopeCapturingHandler)])
-
-    async with httpx.AsyncClient(base_url="http://t", transport=httpx.ASGITransport(app)) as c:
-        await c.get("/")
-
-    assert captured
-    assert captured[0].get("app") is app
+    app = Fusion(routes=[], lifespan=lifespan)
+    async with LifespanManager(app) as manager:
+        assert manager.state == {}
 
 
 @pytest.mark.asyncio
 async def test_default_lifespan_yields_empty_state():
-    app = Fusion(routes=[])
-    events = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
-    _scope, sent = await _send_events(app, events)
-
-    assert sent[0]["type"] == "lifespan.startup.complete"
-    assert sent[1]["type"] == "lifespan.shutdown.complete"
+    async with default_lifespan(None) as state:
+        assert state == {}
 
 
 @pytest.mark.asyncio
-async def test_app_already_in_scope_is_not_overwritten():
-    import httpx
+async def test_shutdown_exception_does_not_send_startup_failed():
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        yield {}
+        raise RuntimeError("late")
 
-    existing_app = object()
-    app = Fusion(routes=[Route("/", methods=["GET"], handler=_OkHandler)])
-
-    captured: list = []
-
-    class CapHandler(Handler):
-        async def handle(self, request: Request) -> Response[_Ok]:
-            from fusion.context import context as ctx_var
-
-            captured.append(ctx_var.get().scope.get("app"))
-            return Response(_Ok(ok=True))
-
-    app2 = Fusion(routes=[Route("/", methods=["GET"], handler=CapHandler)])
-
-    async with httpx.AsyncClient(base_url="http://t", transport=httpx.ASGITransport(app2)) as c:
-        await c.get("/")
-
-    assert len(captured) == 1
-
-
-@pytest.mark.asyncio
-async def test_lifespan_non_startup_first_message_is_ignored():
-    app = Fusion(routes=[])
-
-    sent: list = []
+    app = Fusion(routes=[], lifespan=lifespan)
+    messages: list[dict] = []
+    receive_queue = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
 
     async def receive():
-        return {"type": "lifespan.unknown"}
+        return receive_queue.pop(0)
 
-    async def send(msg):
-        sent.append(msg)
+    async def send(message):
+        messages.append(message)
 
-    scope = {"type": "lifespan", "state": {}}
-    await app(scope, receive, send)
+    with pytest.raises(RuntimeError):
+        await app({"type": "lifespan"}, receive, send)
 
-    assert sent == []
-
-
-@pytest.mark.asyncio
-async def test_dispatch_calls_sub_handler_and_returns_response():
-    """dispatch() executes a registered route within the current context."""
-
-    class Inner(Object):
-        hit: bool
-
-    class InnerHandler(Handler):
-        async def handle(self, request: Request) -> Response[Inner]:
-            return Response(Inner(hit=True))
-
-    class _OuterRequest(Request):
-        pass
-
-    class OuterHandler(Handler):
-        async def handle(self, request: _OuterRequest) -> Response[_Ok]:
-            from fusion.context import context as ctx_var
-
-            app: Fusion = ctx_var.get().scope["app"]
-            result = await app.dispatch("/inner", "GET")
-            assert result is not None
-            assert result.content.hit is True  # type: ignore[union-attr]
-            return Response(_Ok(ok=True))
-
-    app = Fusion(
-        routes=[
-            Route("/inner", methods=["GET"], handler=InnerHandler),
-            Route("/outer", methods=["GET"], handler=OuterHandler),
-        ]
-    )
-
-    async with TestClient(app) as c:
-        r = await c.get("/outer")
-    assert r.status_code == 200
+    assert [m["type"] for m in messages] == ["lifespan.startup.complete"]
 
 
 @pytest.mark.asyncio
-async def test_dispatch_with_path_params():
-    """dispatch() extracts path params from path and passes them to the handler."""
+async def test_non_startup_first_lifespan_message_is_ignored():
+    app = Fusion(routes=[])
 
-    class Item(Object):
-        item_id: str
-
-    from fusion import PathParam
-
-    class ItemRequest(Injectable):
-        item_id: PathParam[str]
-
-    class ItemHandler(Handler):
-        req: ItemRequest
-
-        async def handle(self, request: Request) -> Response[Item]:
-            return Response(Item(item_id=self.req.item_id))
-
-    class _OuterRequest(Request):
-        pass
-
-    captured: list = []
-
-    class OuterHandler(Handler):
-        async def handle(self, request: _OuterRequest) -> Response[_Ok]:
-            from fusion.context import context as ctx_var
-
-            app: Fusion = ctx_var.get().scope["app"]
-            result = await app.dispatch("/items/abc-123", "GET")
-            captured.append(result)
-            return Response(_Ok(ok=True))
-
-    app = Fusion(
-        routes=[
-            Route("/items/{item_id}", methods=["GET"], handler=ItemHandler),
-            Route("/outer", methods=["GET"], handler=OuterHandler),
-        ]
-    )
-
-    async with TestClient(app) as c:
-        await c.get("/outer")
-
-    assert captured[0].content.item_id == "abc-123"  # type: ignore[union-attr]
-
-
-@pytest.mark.asyncio
-async def test_dispatch_returns_none_for_unknown_path():
-    """dispatch() returns None when no route matches."""
-
-    class _OuterRequest(Request):
-        pass
-
-    class OuterHandler(Handler):
-        async def handle(self, request: _OuterRequest) -> Response[_Ok]:
-            from fusion.context import context as ctx_var
-
-            app: Fusion = ctx_var.get().scope["app"]
-            result = await app.dispatch("/nonexistent", "GET")
-            assert result is None
-            return Response(_Ok(ok=True))
-
-    app = Fusion(routes=[Route("/outer", methods=["GET"], handler=OuterHandler)])
-
-    async with TestClient(app) as c:
-        r = await c.get("/outer")
-    assert r.status_code == 200
-
-
-def test_fusion_resolve_returns_route_and_path_params():
-    from fusion.types import Method
-
-    app = Fusion(routes=[Route("/items/{id}", methods=["GET"], handler=_OkHandler)])
-    result = app.resolve("/items/42", Method.GET)
-    assert result is not None
-    _route, path_params = result
-    assert path_params == {"id": "42"}
-
-
-def test_fusion_resolve_accepts_string_method():
-    app = Fusion(routes=[Route("/ping", methods=["GET"], handler=_OkHandler)])
-    assert app.resolve("/ping", "GET") is not None
-    assert app.resolve("/ping", "get") is not None
-
-
-def test_fusion_resolve_unknown_path_returns_none():
-    app = Fusion(routes=[Route("/ping", methods=["GET"], handler=_OkHandler)])
-    assert app.resolve("/nope", "GET") is None
-
-
-@pytest.mark.asyncio
-async def test_exception_during_shutdown_does_not_send_startup_failed():
-    import contextlib
-
-    @contextlib.asynccontextmanager
-    async def flaky_lifespan(app):
-        yield {}
-        raise RuntimeError("shutdown error")
-
-    app = Fusion(routes=[], lifespan=flaky_lifespan)
+    async def receive():
+        return {"type": "lifespan.shutdown"}
 
     sent: list[dict] = []
 
+    async def send(message):
+        sent.append(message)  # pragma: no cover
+
+    await app({"type": "lifespan"}, receive, send)
+    assert sent == []
+
+
+# --- scope -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_app_is_placed_in_scope():
+    seen = {}
+
+    async def handler(request: FromContext[Request]) -> Response[Out]:
+        seen["app"] = request.scope["app"]
+        return Response(Out(value="ok"))
+
+    app = Fusion(routes=[Get("/x", handler)])
+    async with client_for(app) as client:
+        await client.get("/x")
+
+    assert seen["app"] is app
+
+
+@pytest.mark.asyncio
+async def test_existing_scope_app_is_not_overwritten():
+    app = Fusion(routes=[Get("/x", _echo)])
+    sentinel = object()
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/x",
+        "query_string": b"",
+        "headers": [],
+        "app": sentinel,
+    }
+
     async def receive():
-        return {"type": "lifespan.startup"}
+        return {"type": "http.request", "body": b"", "more_body": False}
 
-    startup_complete = False
+    async def send(message):
+        pass
 
-    async def send(msg):
-        nonlocal startup_complete
-        sent.append(msg)
-        if msg["type"] == "lifespan.startup.complete":
-            startup_complete = True
+    await app(scope, receive, send)
+    assert scope["app"] is sentinel
 
-    scope = {"type": "lifespan", "state": {}}
 
-    async def receive_seq():
-        msgs = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
-        for m in msgs:
-            yield m
+# --- resolve / execute ------------------------------------------------------
 
-    gen = receive_seq()
 
-    async def receive2():
-        return await gen.__anext__()
+def test_resolve_returns_route_and_params():
+    route = Get("/users/{id:int}", _echo)
+    app = Fusion(routes=[route])
+    result = app.resolve("/users/7", Method.GET)
+    assert result is not None
+    assert result[0] is route
+    assert result[1] == {"id": "7"}
 
-    with pytest.raises(RuntimeError, match="shutdown error"):
-        await app(scope, receive2, send)
 
-    types = [m["type"] for m in sent]
-    assert "lifespan.startup.complete" in types
-    assert "lifespan.startup.failed" not in types
+def test_resolve_accepts_a_string_method():
+    app = Fusion(routes=[Get("/x", _echo)])
+    assert app.resolve("/x", "get") is not None
+
+
+def test_resolve_unknown_path_is_none():
+    app = Fusion(routes=[Get("/x", _echo)])
+    assert app.resolve("/nope", Method.GET) is None
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_another_route():
+    async def inner(q: Http.Query[str] = "") -> Response[Out]:
+        return Response(Out(value=f"inner:{q}"))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/inner", query={"q": "hi"})
+        return Response(Out(value=f"{result.status}:{result.body.decode()}"))
+
+    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {"value": '200:{"value":"inner:hi"}'}
+
+
+@pytest.mark.asyncio
+async def test_execute_accepts_a_query_string_in_the_path():
+    async def inner(q: Http.Query[str] = "") -> Response[Out]:
+        return Response(Out(value=q))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/inner?q=inline")
+        return Response(Out(value=result.body.decode()))
+
+    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {"value": '{"value":"inline"}'}
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_path_params():
+    async def inner(id: Http.Path[int]) -> Response[Out]:
+        return Response(Out(value=id))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/inner/5")
+        return Response(Out(value=result.body.decode()))
+
+    app = Fusion(routes=[Get("/inner/{id:int}", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {"value": '{"value":5}'}
+
+
+@pytest.mark.asyncio
+async def test_execute_inherits_headers_and_honours_overrides():
+    async def inner(agent: Http.Header[str] = "?", trace: Http.Header[str] = "?") -> Response[Out]:
+        return Response(Out(value=f"{agent}/{trace}"))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/inner", headers={"trace": "sub"})
+        return Response(Out(value=result.body.decode()))
+
+    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        response = await client.get("/outer", headers={"agent": "outer", "trace": "outer"})
+
+    assert response.json() == {"value": '{"value":"outer/sub"}'}
+
+
+@pytest.mark.asyncio
+async def test_execute_sends_a_body():
+    class NewThing(Object):
+        name: str
+
+    async def inner(body: Http.Body[NewThing]) -> Response[Out]:
+        return Response(Out(value=body.name))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("POST", "/inner", body=b'{"name": "ada"}')
+        return Response(Out(value=result.body.decode()))
+
+    app = Fusion(routes=[Post("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {"value": '{"value":"ada"}'}
+
+
+@pytest.mark.asyncio
+async def test_execute_captures_a_failure_instead_of_raising():
+    """One bad sub-request must not take the whole batch with it."""
+
+    async def inner() -> Response[Out]:
+        raise RuntimeError("sub-request exploded")
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/inner")
+        return Response(Out(value=result.status))
+
+    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {"value": 500}
+
+
+@pytest.mark.asyncio
+async def test_execute_captures_an_unknown_path_as_a_404():
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/nope")
+        return Response(Out(value=result.status))
+
+    app = Fusion(routes=[Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {"value": 404}
+
+
+@pytest.mark.asyncio
+async def test_execute_refuses_a_route_that_streams():
+    async def stream() -> AsyncIterator[Out]:
+        yield Out(value="tick")  # pragma: no cover
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/stream")
+        detail = json.loads(result.body)["detail"]
+        return Response(Out(value=f"{result.status}:{detail}"))
+
+    app = Fusion(routes=[Get("/stream", stream), Get("/outer", outer)])
+    async with client_for(app) as client:
+        value = (await client.get("/outer")).json()["value"]
+
+    assert value.startswith("500:")
+    assert "cannot be captured" in value
+
+
+@pytest.mark.asyncio
+async def test_execute_refuses_to_recurse_forever():
+    """A route executing itself is bounded, rather than exhausting the stack."""
+    calls: list[int] = []
+
+    async def looping(request: FromContext[Request]) -> Response[Out]:
+        calls.append(1)
+        result = await request.scope["app"].execute("GET", "/loop")
+        return Response(Out(value=result.status))
+
+    app = Fusion(routes=[Get("/loop", looping)])
+    async with client_for(app) as client:
+        response = await client.get("/loop")
+
+    # The real request, plus one nested call per level until the guard refuses.
+    assert response.status_code == 200
+    assert len(calls) == Fusion.MAX_SUBREQUEST_DEPTH + 1
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_the_target_middleware_and_authorization():
+    seen: list[str] = []
+
+    class Allow:
+        async def authorize(self, roles: frozenset[str]) -> bool:
+            seen.append("authorize")
+            return True
+
+    async def guard(token: Auth.Bearer) -> None:
+        seen.append("middleware")
+
+    @requires("inner:read")
+    async def inner(token: Auth.Bearer) -> Response[Out]:
+        return Response(Out(value="inner"))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("GET", "/inner")
+        return Response(Out(value=result.status))
+
+    app = Fusion(
+        routes=[Get("/inner", inner, middlewares=[guard]), Get("/outer", outer)],
+        authorizer=Allow(),
+    )
+    async with client_for(app) as client:
+        response = await client.get("/outer", headers={"authorization": "Bearer t"})
+
+    assert response.json() == {"value": 200}
+    assert seen == ["middleware", "authorize"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tears_down_its_dependencies():
+    """Regression: the sub-context's exit stack was never unwound."""
+    events: list[str] = []
+
+    class Session:
+        pass
+
+    @factory
+    @asynccontextmanager
+    async def session_factory() -> AsyncIterator[Session]:
+        events.append("open")
+        try:
+            yield Session()
+        finally:
+            events.append("close")
+
+    async def inner(session: Inject[Session]) -> Response[Out]:
+        return Response(Out(value="inner"))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        await request.scope["app"].execute("GET", "/inner")
+        events.append("after-execute")
+        return Response(Out(value="ok"))
+
+    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        await client.get("/outer")
+
+    assert events == ["open", "close", "after-execute"]
+
+
+@pytest.mark.asyncio
+async def test_routes_and_tools_stay_enumerable():
+    from fusion import Tool
+
+    async def a_tool(q: Tool.Arg[str]) -> Response[Out]:
+        """A tool."""
+        return Response(Out(value=q))
+
+    route = Get("/x", _echo)
+    app = Fusion(routes=[route], tools=[a_tool])
+
+    assert app.routes == [route]
+    assert list(app.tools) == ["a_tool"]
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_the_stream_starts_cannot_be_turned_into_an_error():
+    """Once the status line is out, there is no error response left to send."""
+    from fusion import Event
+    from fusion.exceptions import ValidationException
+
+    async def handler() -> AsyncIterator[Event[Out]]:
+        yield Event(data=Out(value="first"))
+        raise ValidationException(detail="too late")
+
+    app = Fusion(routes=[Get("/x", handler)])
+    sent: list[dict] = []
+
+    delivered = False
+
+    async def receive():
+        # One body message, then block the way a real server does between
+        # messages; an instantly-resolving receive() is not realistic here.
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.Event().wait()  # pragma: no cover
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/x",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    with pytest.raises(ValidationException):
+        await app(scope, receive, send)
+
+    # The 200 stream had already begun, so no problem response was appended.
+    assert sent[0]["status"] == 200
+    assert not any(m.get("status") == 400 for m in sent)
+
+
+@pytest.mark.asyncio
+async def test_execute_delivers_its_body_once_then_reports_a_disconnect():
+    """Matching a real request: after the body is consumed there is nothing more."""
+
+    async def inner(request: FromContext[Request]) -> Response[Out]:
+        first = await request.receive()
+        second = await request.receive()
+        return Response(Out(value=f"{first['type']}/{second['type']}"))
+
+    async def outer(request: FromContext[Request]) -> Response[Out]:
+        result = await request.scope["app"].execute("POST", "/inner", body=b"{}")
+        return Response(Out(value=result.body.decode()))
+
+    app = Fusion(routes=[Post("/inner", inner), Get("/outer", outer)])
+    async with client_for(app) as client:
+        assert (await client.get("/outer")).json() == {
+            "value": '{"value":"http.request/http.disconnect"}'
+        }
+
+
+@pytest.mark.asyncio
+async def test_execute_works_outside_a_request():
+    """No ambient context to inherit from - the sub-request stands on its own."""
+
+    async def inner(agent: Http.Header[str] = "none") -> Response[Out]:
+        return Response(Out(value=agent))
+
+    app = Fusion(routes=[Get("/inner", inner)])
+
+    bare = await app.execute("GET", "/inner")
+    with_header = await app.execute("GET", "/inner", headers={"agent": "script"})
+
+    assert bare.status == 200
+    assert bare.body == b'{"value":"none"}'
+    assert with_header.body == b'{"value":"script"}'

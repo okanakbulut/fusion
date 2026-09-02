@@ -63,15 +63,20 @@ def field(
 
 
 _CONSTRAINT_ATTRS = ("ge", "gt", "le", "lt", "min_length", "max_length", "pattern")
+_META_ATTRS = (*_CONSTRAINT_ATTRS, "description")
 
 
 def _constraints_of(field_info: Field) -> dict[str, typing.Any]:
-    """Collect the msgspec.Meta constraints declared on a Field, in declaration order."""
-    return {
-        attr: value
-        for attr in _CONSTRAINT_ATTRS
-        if (value := getattr(field_info, attr)) is not None
-    }
+    """Collect the msgspec.Meta settings declared on a Field, in declaration order.
+
+    ``description`` and ``deprecated`` are carried through as well as the
+    validation constraints: they are what make a generated tool or OpenAPI
+    schema self-describing.
+    """
+    meta = {attr: value for attr in _META_ATTRS if (value := getattr(field_info, attr)) is not None}
+    if field_info.deprecated:
+        meta["extra_json_schema"] = {"deprecated": True}
+    return meta
 
 
 @typing.dataclass_transform(field_specifiers=(field,))

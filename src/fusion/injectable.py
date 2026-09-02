@@ -2,14 +2,22 @@ import sys
 import typing
 
 from .object import Object
-from .resolvers import MISSING
+from .resolvers import MISSING, Resolver, build_resolvers
+from .types import Transport
 
 
 class Injectable(Object):
-    """Base class for all injectable objects."""
+    """Base class for all injectable objects.
 
-    __allowed_annotations__: typing.ClassVar[set[typing.Any]] = set()
-    __resolvers__: typing.ClassVar[dict[str, typing.Any]] = {}
+    Subclasses declare their fields with explicit markers; the resolver table is
+    built once at class creation and reused for every instantiation.
+    """
+
+    __transports__: typing.ClassVar[frozenset[Transport]] = frozenset(Transport)
+    """Which transports this class's fields may draw from.  ``Request`` narrows
+    this to HTTP; a plain ``Injectable`` accepts any."""
+
+    __resolvers__: typing.ClassVar[dict[str, Resolver]] = {}
 
     def __init_subclass__(cls, **kwargs: typing.Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -18,41 +26,9 @@ class Injectable(Object):
         type_hints = typing.get_type_hints(
             cls, globalns=global_ns, localns=vars(cls), include_extras=True
         )
-
-        from .resolvers import FactoryResolver, InjectableResolver, Resolver, has_factory
-
-        resolvers: dict[str, Resolver] = {}
-        for attr_name, annotation in type_hints.items():
-            origin = typing.get_origin(annotation)
-
-            if origin in [typing.ClassVar, type]:
-                continue
-
-            if origin is None:
-                # Allow bare Injectable types (implicit Inject)
-                if isinstance(annotation, type) and issubclass(annotation, Injectable):
-                    resolvers[attr_name] = InjectableResolver(name=attr_name, typ=annotation)
-                    continue
-                if isinstance(annotation, type) and has_factory(annotation):
-                    resolvers[attr_name] = FactoryResolver(name=attr_name, typ=annotation)
-                    continue
-                raise TypeError(f"Type hint {annotation} is not a valid type")
-
-            if cls.__allowed_annotations__ and origin not in cls.__allowed_annotations__:
-                raise TypeError(f"Type hint {annotation} is not allowed in {cls.__name__}")
-
-            try:
-                annotated = origin.__value__
-                metadata = typing.cast(dict[str, typing.Any], annotated.__metadata__[0])
-                resolver_class = typing.cast(type[Resolver], metadata["resolver"])
-            except Exception as exc:
-                raise TypeError(f"Type hint {annotation} is not a valid type") from exc
-
-            args = typing.get_args(annotation)
-            inner_type: type[typing.Any] = args[0] if args else type(typing.Any)
-            resolvers[attr_name] = resolver_class(name=attr_name, typ=inner_type)
-
-        cls.__resolvers__ = resolvers
+        cls.__resolvers__ = build_resolvers(
+            type_hints, allowed=cls.__transports__, owner=cls.__name__
+        )
 
     @classmethod
     async def instance(cls) -> typing.Self:

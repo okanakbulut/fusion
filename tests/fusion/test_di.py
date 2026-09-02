@@ -1,222 +1,181 @@
-"""Tests for fusion's dependency injection system.
-
-These tests document how @factory, Injectable, and Handler collaborate
-to wire dependencies into request handlers automatically.
-"""
-
+import typing
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
 
-from fusion import Fusion, Handler, Injectable, Object, Request, Response, Route, factory
-from fusion.injectable import Injectable as _Injectable
-from fusion.resolvers import __factories__
-from fusion.testing import TestClient
+from fusion import Fusion, Get, Http, Inject, Injectable, Object, Response, factory
+from fusion.resolvers import __factories__, has_factory
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from .conftest import client_for
 
 
-def _app(*routes):
-    return Fusion(routes=list(routes))
+class Out(Object):
+    value: typing.Any
 
 
-# ---------------------------------------------------------------------------
-# @factory basics
-# ---------------------------------------------------------------------------
+class Database:
+    url = "postgres://test"
 
 
 @pytest.mark.asyncio
-async def test_factory_injection():
-    class DB:
-        url = "postgres://test"
-
+async def test_factory_backed_dependency_is_injected():
     @factory
-    async def db_factory() -> DB:
-        return DB()
+    async def db_factory() -> Database:
+        return Database()
+
+    async def handler(db: Inject[Database]) -> Response[Out]:
+        return Response(Out(value=db.url))
+
+    app = Fusion(routes=[Get("/db", handler)])
+    async with client_for(app) as client:
+        assert (await client.get("/db")).json() == {"value": "postgres://test"}
+
+
+@pytest.mark.asyncio
+async def test_injectable_subclass_is_built_from_its_own_markers():
+    @factory
+    async def db_factory() -> Database:
+        return Database()
 
     class Deps(Injectable):
-        db: DB
+        db: Inject[Database]
 
-    class Output(Object):
-        url: str
+    async def handler(deps: Inject[Deps]) -> Response[Out]:
+        return Response(Out(value=deps.db.url))
 
-    class Handler1(Handler):
-        deps: Deps
-
-        async def handle(self, request: Request) -> Response[Output]:
-            return Response(Output(url=self.deps.db.url))
-
-    app = _app(Route("/db", methods=["GET"], handler=Handler1))
-
-    async with TestClient(app) as c:
-        r = await c.get("/db")
-    assert r.status_code == 200
-    assert r.json()["url"] == "postgres://test"
+    app = Fusion(routes=[Get("/deps", handler)])
+    async with client_for(app) as client:
+        assert (await client.get("/deps")).json() == {"value": "postgres://test"}
 
 
 @pytest.mark.asyncio
-async def test_factory_context_manager_cleanup_runs_after_response():
+async def test_dependency_is_constructed_once_per_request():
+    calls = []
+
+    @factory
+    async def db_factory() -> Database:
+        calls.append(1)
+        return Database()
+
+    async def handler(a: Inject[Database], b: Inject[Database]) -> Response[Out]:
+        return Response(Out(value=a is b))
+
+    app = Fusion(routes=[Get("/twice", handler)])
+    async with client_for(app) as client:
+        assert (await client.get("/twice")).json() == {"value": True}
+
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_each_request_gets_a_fresh_dependency():
+    calls = []
+
+    @factory
+    async def db_factory() -> Database:
+        calls.append(1)
+        return Database()
+
+    async def handler(db: Inject[Database]) -> Response[Out]:
+        return Response(Out(value=id(db)))
+
+    app = Fusion(routes=[Get("/db", handler)])
+    async with client_for(app) as client:
+        await client.get("/db")
+        await client.get("/db")
+
+    assert calls == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_factory_tears_down_after_the_response():
     events: list[str] = []
 
-    class Conn:
+    class Session:
         pass
 
     @factory
     @asynccontextmanager
-    async def conn_factory() -> AsyncIterator[Conn]:
+    async def session_factory() -> AsyncIterator[Session]:
         events.append("open")
         try:
-            yield Conn()
+            yield Session()
         finally:
             events.append("close")
 
-    class Deps(Injectable):
-        conn: Conn
+    async def handler(session: Inject[Session]) -> Response[Out]:
+        events.append("handle")
+        return Response(Out(value="ok"))
 
-    class Output(Object):
-        ok: bool
+    app = Fusion(routes=[Get("/s", handler)])
+    async with client_for(app) as client:
+        await client.get("/s")
 
-    class Handler2(Handler):
-        deps: Deps
-
-        async def handle(self, request: Request) -> Response[Output]:
-            events.append("handle")
-            return Response(Output(ok=True))
-
-    app = _app(Route("/conn", methods=["GET"], handler=Handler2))
-
-    async with TestClient(app) as c:
-        r = await c.get("/conn")
-
-    assert r.status_code == 200
     assert events == ["open", "handle", "close"]
 
 
 @pytest.mark.asyncio
-async def test_factory_missing_return_annotation_raises():
-    with pytest.raises(ValueError, match="return type"):
+async def test_teardown_runs_even_when_the_handler_raises():
+    events: list[str] = []
+
+    class Session:
+        pass
+
+    @factory
+    @asynccontextmanager
+    async def session_factory() -> AsyncIterator[Session]:
+        try:
+            yield Session()
+        finally:
+            events.append("close")
+
+    async def handler(session: Inject[Session]) -> Response[Out]:
+        raise RuntimeError("boom")
+
+    app = Fusion(routes=[Get("/s", handler)])
+    async with client_for(app) as client:
+        assert (await client.get("/s")).status_code == 500
+
+    assert events == ["close"]
+
+
+@pytest.mark.asyncio
+async def test_injecting_an_unprovided_type_is_an_error():
+    class Orphan:
+        pass
+
+    async def handler(x: Inject[Orphan]) -> Response[Out]:
+        return Response(Out(value=None))
+
+    app = Fusion(routes=[Get("/x", handler)])
+    async with client_for(app) as client:
+        assert (await client.get("/x")).status_code == 500
+
+
+def test_factory_requires_a_return_annotation():
+    with pytest.raises(ValueError, match="return type annotation"):
 
         @factory
-        async def bad():  # type: ignore[return]
-            return object()
+        async def bad():  # type: ignore[no-untyped-def]
+            return 1
 
 
-@pytest.mark.asyncio
-async def test_factory_no_registered_factory_raises_runtime_error():
-    class Ghost:
+def test_factory_unwraps_async_iterator_annotations():
+    class Thing:
         pass
 
-    from fusion.resolvers import FactoryResolver
+    @factory
+    @asynccontextmanager
+    async def thing_factory() -> AsyncIterator[Thing]:
+        yield Thing()
 
-    resolver = FactoryResolver(name="ghost", typ=Ghost)
-
-    from fusion.context import Context
-
-    sent: list = []
-
-    async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(msg):
-        sent.append(msg)
-
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/",
-        "query_string": b"",
-        "headers": [],
-        "state": {},
-    }
-    async with Context(scope, receive, send) as _ctx:
-        with pytest.raises(RuntimeError, match="No factory found"):
-            await resolver.resolve()
+    assert has_factory(Thing)
+    assert __factories__[Thing] is thing_factory
 
 
-# ---------------------------------------------------------------------------
-# Injectable with multiple deps
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_injectable_with_multiple_deps():
-    class A(Injectable):
-        pass
-
-    class B(Injectable):
-        pass
-
-    class Composite(Injectable):
-        a: A
-        b: B
-
-    inst = await Composite.instance()
-    assert isinstance(inst.a, A)
-    assert isinstance(inst.b, B)
-
-
-# ---------------------------------------------------------------------------
-# Invalid annotation raises TypeError at class-definition time
-# ---------------------------------------------------------------------------
-
-
-def test_invalid_annotation_on_injectable_raises():
-    with pytest.raises(TypeError, match="not a valid type"):
+def test_injectable_rejects_an_unmarked_field():
+    with pytest.raises(TypeError, match="carries no Fusion marker"):
 
         class Bad(Injectable):
-            x: int  # int is not Injectable, not a factory, not Annotated
-
-
-def test_handler_request_scoped_annotation_raises():
-    from fusion import QueryParam
-
-    with pytest.raises(TypeError, match="request-scoped"):
-
-        class BadHandler(Handler):
-            message: QueryParam[str]
-
-
-def test_list_annotation_raises_on_injectable():
-    with pytest.raises(TypeError, match="not a valid type"):
-
-        class BadInjectable(Injectable):
-            items: list[int]  # list[int] has non-None origin but no TypeAlias __value__
-
-
-def test_handler_get_request_class_no_hint_raises():
-    from fusion.handler import Handler as _Handler
-
-    class NoHintHandler(_Handler):
-        async def handle(self, request) -> None:  # type: ignore[override]
-            pass
-
-    instance = object.__new__(NoHintHandler)
-    with pytest.raises(TypeError, match="'request' parameter"):
-        instance.get_request_class()
-
-
-def test_resolver_raises_when_no_context():
-    from fusion.resolvers import QueryParamResolver
-
-    resolver = QueryParamResolver(name="x", typ=str)
-    import asyncio
-
-    with pytest.raises(RuntimeError, match="No context available"):
-        asyncio.run(resolver.resolve())
-
-
-def test_allowed_annotation_violation_on_request_raises():
-    import typing
-
-    from fusion import Request
-    from fusion.resolvers import QueryParamResolver
-
-    type _Custom[T] = typing.Annotated[T, {"resolver": QueryParamResolver}]
-
-    with pytest.raises(TypeError, match="not allowed"):
-
-        class BadRequest(Request):
-            dep: _Custom[str]  # _Custom is not in Request.__allowed_annotations__
+            db: Database

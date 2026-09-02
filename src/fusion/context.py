@@ -19,16 +19,27 @@ class Context(contextlib.AsyncExitStack):
     receive: Receive
     send: Send
 
+    dependencies: dict[type, typing.Any]
+    """Per-context dependency cache, keyed by provided type, so two parameters
+    asking for the same type share one instance instead of constructing two."""
+
+    arguments: typing.Mapping[str, typing.Any]
+    """Flat argument source for tool calls.  Empty for HTTP, where parameters
+    come from the path, query, headers, cookies or body instead."""
+
     def __init__(self, scope: Scope, receive: Receive, send: Send) -> None:
         super().__init__()
         self._body = None
         self.scope = scope
         self.receive = receive
         self.send = send
+        self.dependencies = {}
+        self.arguments = {}
 
     async def __aenter__(self) -> typing.Self:
-        if context.get(None):
-            raise RuntimeError("Nested context is not allowed")
+        # Contexts nest: an MCP tool call runs inside the HTTP request that
+        # carried it, and each needs its own exit stack and dependency cache.
+        # ContextVar tokens already form a stack, so entering just pushes.
         self._token = context.set(self)
         return await super().__aenter__()
 

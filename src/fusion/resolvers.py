@@ -9,6 +9,7 @@ from .context import Context, context
 from .exceptions import ValidationException
 from .object import MetaObject, Object
 from .responses import FieldError
+from .types import Transport
 
 T = typing.TypeVar("T")
 type Constructor[T] = typing.Callable[[], typing.Awaitable[T] | AbstractAsyncContextManager[T]]
@@ -22,8 +23,8 @@ class _Missing(enum.Enum):
 
 MISSING = _Missing.MISSING
 """Sentinel returned by a resolver when its value is absent from the request,
-so ``Request.instance()`` can omit the kwarg entirely and let the struct's own
-field default apply, instead of forcing a conversion of ``None``."""
+so the binder can omit the argument entirely and let the parameter's own
+default apply, instead of forcing a conversion of ``None``."""
 
 
 def has_factory(typ: type[typing.Any]) -> bool:
@@ -36,6 +37,10 @@ class Resolver(Object):
     name: str
     typ: type[typing.Any]
 
+    location: typing.ClassVar[str] = "unknown"
+    """Where the value came from.  Doubles as OpenAPI's ``in:`` for the HTTP
+    resolvers and as ``FieldError.location`` for every resolver."""
+
     @property
     def context(self) -> Context:
         if ctx := context.get(None):
@@ -43,33 +48,154 @@ class Resolver(Object):
         raise RuntimeError("No context available")
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the value from the request context."""
+        """Resolve the value from the active context."""
         raise NotImplementedError
 
 
-class InjectableResolver(Resolver):
-    """Resolver for injected dependencies."""
+class Marker(Object, frozen=True):
+    """Metadata attached to an annotation alias, naming the value's source.
+
+    Both halves matter: ``resolver`` says how to obtain the value, ``transport``
+    says which transports the parameter is meaningful under, which is what lets
+    a wrong-transport registration be rejected at construction time.
+    """
+
+    resolver: type[Resolver]
+    transport: Transport
+
+
+def marker_of(annotation: typing.Any) -> Marker | None:
+    """Return the ``Marker`` carried by an annotation alias, or None.
+
+    Markers are declared as PEP 695 aliases over ``Annotated``, so the payload
+    sits at ``get_origin(annotation).__value__.__metadata__[0]`` - or on the
+    alias itself, for a credential marker whose type the scheme already fixes.
+    """
+    origin = typing.get_origin(annotation) or annotation
+    value = getattr(origin, "__value__", None)
+    metadata = getattr(value, "__metadata__", None)
+    if not metadata:
+        return None
+    candidate = metadata[0]
+    return candidate if isinstance(candidate, Marker) else None
+
+
+def build_resolvers(
+    hints: dict[str, typing.Any],
+    *,
+    allowed: frozenset[Transport],
+    owner: str,
+) -> dict[str, Resolver]:
+    """Build the resolver table for a set of annotations.
+
+    Shared by ``Injectable.__init_subclass__`` (class annotations) and
+    ``Signature`` (function parameters) so the two can never drift apart.
+    """
+    resolvers: dict[str, Resolver] = {}
+
+    for name, annotation in hints.items():
+        if name == "return":
+            continue
+
+        origin = typing.get_origin(annotation)
+        if origin in (typing.ClassVar, type):
+            continue
+
+        marker = marker_of(annotation)
+        if marker is None:
+            raise TypeError(
+                f"Parameter {name!r} on {owner!r} is annotated {annotation!r}, which carries "
+                f"no Fusion marker. Every parameter must name its source explicitly - wrap a "
+                f"dependency as Inject[...], or use an Http.* / Tool.* marker."
+            )
+
+        if marker.transport is not Transport.ANY and marker.transport not in allowed:
+            allowed_names = ", ".join(sorted(t.value for t in allowed))
+            raise TypeError(
+                f"Parameter {name!r} on {owner!r} uses a {marker.transport.value!r} marker, "
+                f"which has no meaning here (this accepts: {allowed_names}). "
+                f"Use a marker for one of those transports, or Inject[...] for a dependency."
+            )
+
+        args = typing.get_args(annotation)
+        inner_type: type[typing.Any] = args[0] if args else typing.cast(type, typing.Any)
+        resolvers[name] = marker.resolver(name=name, typ=inner_type)
+
+    return resolvers
+
+
+class DependencyResolver(Resolver):
+    """Resolver for a bare ``Inject[T]``, dispatching on how ``T`` is provided.
+
+    ``Inject`` is one marker over two mechanisms - an ``Injectable`` subclass
+    builds itself, a factory-backed type is built by its factory.  Which one
+    applies is decided on first use and remembered, so a request never repeats
+    the check, yet a factory registered after the handler was defined is still
+    picked up.
+    """
+
+    location: typing.ClassVar[str] = "dependency"
+
+    from_factory: bool | None = None
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the injected dependency."""
-        return self.name, await self.typ.instance()
+        ctx = self.context
+        cache = ctx.dependencies
+        if self.typ in cache:
+            return self.name, cache[self.typ]
 
+        if self.from_factory is None:
+            self.from_factory = self._resolve_kind()
 
-class FactoryResolver(Resolver):
-    """Resolver for third-party dependencies backed by registered factories."""
-
-    async def resolve(self) -> tuple[str, typing.Any]:
-        factory = __factories__.get(self.typ)
-        if factory is None:
-            raise RuntimeError(f"No factory found for {self.typ}")
-
-        value = factory()
-        if isinstance(value, AbstractAsyncContextManager):
-            value = await self.context.enter_async_context(value)
+        if self.from_factory:
+            value = await self._from_factory(ctx)
         else:
-            value = await value
+            value = await self.typ.instance()
 
+        cache[self.typ] = value
         return self.name, value
+
+    def _resolve_kind(self) -> bool:
+        from .injectable import Injectable
+
+        if isinstance(self.typ, type) and issubclass(self.typ, Injectable):
+            return False
+        if has_factory(self.typ):
+            return True
+        raise RuntimeError(
+            f"Cannot inject {self.typ!r} for {self.name!r}: it is neither an Injectable "
+            f"subclass nor a type with a registered @factory."
+        )
+
+    async def _from_factory(self, ctx: Context) -> typing.Any:
+        factory = __factories__.get(self.typ)
+        if factory is None:  # pragma: no cover - registry emptied after first use
+            raise RuntimeError(f"No factory found for {self.typ}")
+        produced = factory()
+        if isinstance(produced, AbstractAsyncContextManager):
+            return await ctx.enter_async_context(produced)
+        return await produced
+
+
+class ContextResolver(Resolver):
+    """Resolver for context-backed façades such as ``Request``."""
+
+    location: typing.ClassVar[str] = "context"
+
+    async def resolve(self) -> tuple[str, typing.Any]:
+        return self.name, self.typ()
+
+
+class ToolArgResolver(Resolver):
+    """Resolver for a tool-call argument."""
+
+    location: typing.ClassVar[str] = "argument"
+
+    async def resolve(self) -> tuple[str, typing.Any]:
+        arguments = self.context.arguments
+        if self.name not in arguments:
+            return self.name, MISSING
+        return self.name, msgspec.convert(arguments[self.name], self.typ, strict=False)
 
 
 class QueryParamResolver(Resolver):
@@ -78,7 +204,6 @@ class QueryParamResolver(Resolver):
     location: typing.ClassVar[str] = "query"
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the query parameter from the request context."""
         if self.name not in self.context.query_params:
             return self.name, MISSING
         value = self.context.query_params[self.name]
@@ -91,8 +216,9 @@ class PathParamResolver(Resolver):
     location: typing.ClassVar[str] = "path"
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the path parameter from the request context."""
-        value = self.context.path_params.get(self.name, None)
+        if self.name not in self.context.path_params:
+            return self.name, MISSING
+        value = self.context.path_params[self.name]
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
@@ -102,7 +228,6 @@ class RequestBodyResolver(Resolver):
     location: typing.ClassVar[str] = "body"
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the request body from the request context."""
         body = await self.context.body()
 
         is_struct = isinstance(self.typ, type) and (
@@ -120,7 +245,10 @@ class RequestBodyResolver(Resolver):
 
         try:
             raw = msgspec.json.decode(body)
-        except msgspec.DecodeError as exc:
+        except msgspec.DecodeError as exc:  # pragma: no cover - unreachable
+            # Typed decoding parses the JSON before checking types, so malformed
+            # input already raised DecodeError above; this only guards the
+            # invariant.
             raise ValidationException(detail=str(exc)) from exc
 
         if not isinstance(raw, dict):
@@ -164,9 +292,10 @@ class HeaderResolver(Resolver):
     location: typing.ClassVar[str] = "header"
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the header parameter from the request context."""
-        value = self.context.headers.get(self.name, None)
-        return self.name, msgspec.convert(value, self.typ, strict=False)
+        headers = self.context.headers
+        if self.name not in headers:
+            return self.name, MISSING
+        return self.name, msgspec.convert(headers[self.name], self.typ, strict=False)
 
 
 class CookieResolver(Resolver):
@@ -175,10 +304,10 @@ class CookieResolver(Resolver):
     location: typing.ClassVar[str] = "cookie"
 
     async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the cookie parameter from the request context."""
         cookies = {
             key.lower().replace("-", "_").replace(" ", "_"): value
             for key, value in self.context.cookies.items()
         }
-        value = cookies.get(self.name, None)
-        return self.name, msgspec.convert(value, self.typ, strict=False)
+        if self.name not in cookies:
+            return self.name, MISSING
+        return self.name, msgspec.convert(cookies[self.name], self.typ, strict=False)
