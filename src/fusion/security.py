@@ -15,7 +15,7 @@ import base64
 import re
 import typing
 
-from .context import context
+from .context import Context, current
 from .exceptions import ProblemException
 from .object import Object
 from .resolvers import Resolver
@@ -63,8 +63,9 @@ class SecurityResolver(Resolver):
         """The OpenAPI Security Scheme Object for this credential."""
         raise NotImplementedError  # pragma: no cover
 
-    def _authorization(self, expected: str) -> str:
-        scheme, _, rest = self.context.headers.get("authorization", "").partition(" ")
+    def _authorization(self, ctx: Context, expected: str) -> str:
+        header = ctx.header("authorization") or ""
+        scheme, _, rest = header.partition(" ")
         if scheme.lower() != expected or not rest.strip():
             raise ProblemException(Unauthorized(detail=f"Expected a {expected.title()} credential"))
         return rest.strip()
@@ -80,8 +81,8 @@ class BearerResolver(SecurityResolver):
     def scheme(self) -> dict[str, typing.Any]:
         return {"type": "http", "scheme": "bearer"}
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        return self.name, self._authorization("bearer")
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        return self.name, self._authorization(ctx or self.context, "bearer")
 
 
 class BasicResolver(SecurityResolver):
@@ -94,8 +95,8 @@ class BasicResolver(SecurityResolver):
     def scheme(self) -> dict[str, typing.Any]:
         return {"type": "http", "scheme": "basic"}
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        encoded = self._authorization("basic")
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        encoded = self._authorization(ctx or self.context, "basic")
         try:
             decoded = base64.b64decode(encoded, validate=True).decode()
         except ValueError, UnicodeDecodeError:
@@ -129,11 +130,11 @@ class ApiKeyResolver(SecurityResolver):
     def scheme(self) -> dict[str, typing.Any]:
         return {"type": "apiKey", "in": self.where, "name": self.wire_name}
 
-    def _source(self) -> typing.Mapping[str, typing.Any]:
-        return self.context.headers
+    def _value(self, ctx: Context) -> typing.Any:
+        return ctx.header(self.name)
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        value = self._source().get(self.name)
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        value = self._value(ctx or self.context)
         if not value:
             raise ProblemException(Unauthorized(detail=f"Missing {self.wire_name}"))
         return self.name, str(value)
@@ -142,15 +143,15 @@ class ApiKeyResolver(SecurityResolver):
 class ApiKeyQueryResolver(ApiKeyResolver):
     where: typing.ClassVar[str] = "query"
 
-    def _source(self) -> typing.Mapping[str, typing.Any]:
-        return self.context.query_params
+    def _value(self, ctx: Context) -> typing.Any:
+        return ctx.query_params.get(self.name)
 
 
 class ApiKeyCookieResolver(ApiKeyResolver):
     where: typing.ClassVar[str] = "cookie"
 
-    def _source(self) -> typing.Mapping[str, typing.Any]:
-        return self.context.cookies
+    def _value(self, ctx: Context) -> typing.Any:
+        return ctx.cookies.get(self.name)
 
 
 def requires[F: typing.Callable[..., typing.Any]](*roles: str) -> typing.Callable[[F], F]:
@@ -182,7 +183,7 @@ async def authorize(roles: frozenset[str]) -> Forbidden | None:
     """
     if not roles:
         return None
-    authorizer = context.get().scope["app"].authorizer
+    authorizer = current().scope["app"].authorizer
     if await authorizer.authorize(roles):
         return None
     return Forbidden(detail=f"Requires {', '.join(sorted(roles))}")

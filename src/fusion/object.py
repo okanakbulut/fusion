@@ -144,4 +144,12 @@ class MetaObject(msgspec.StructMeta):  # type: ignore[misc]
 
 
 class Object(metaclass=MetaObject, kw_only=True):
+    """Base for every struct the framework defines or a user declares.
+
+    Instances carry no ``__dict__`` and no ``__weakref__``: a struct is meant to
+    be small.  Declare ``class Foo(Object, weakref=True)`` on the rare class that
+    needs to be the key of a weak mapping - it costs one pointer per instance,
+    and ``_utils.cached_property`` explains when that is worth it.
+    """
+
     __fields__: typing.ClassVar[dict[str, Field]]

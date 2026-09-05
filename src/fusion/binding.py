@@ -11,6 +11,7 @@ import typing
 
 import msgspec
 
+from .context import current
 from .exceptions import ValidationException
 from .resolvers import MISSING, Resolver, build_resolvers
 from .responses import FieldError, Problem
@@ -131,10 +132,11 @@ async def bind(signature: Signature) -> dict[str, typing.Any]:
     """
     params: dict[str, typing.Any] = {}
     errors: list[FieldError] = []
+    ctx = current()
 
     for resolver in signature.resolvers.values():
         try:
-            name, value = await resolver.resolve()
+            name, value = await resolver.resolve(ctx)
             if value is not MISSING:
                 params[name] = value
             elif name in signature.required:

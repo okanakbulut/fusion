@@ -422,3 +422,39 @@ def test_both_spellings_of_a_none_yield_are_accepted():
     async def handler() -> Response[_Payload]: ...
 
     assert Get("/x", handler, middlewares=[typing_spelling, abc_spelling]) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_resolver_answers_the_same_with_or_without_a_context_argument():
+    """``bind`` passes the context, but the argument stays optional."""
+    from fusion.resolvers import PathParamResolver, QueryParamResolver
+    from fusion.security import BearerResolver
+
+    resolvers = [
+        QueryParamResolver(name="q", typ=str),
+        PathParamResolver(name="id", typ=int),
+        BearerResolver(name="token", typ=str),
+    ]
+
+    async with _http_context(path_params={"id": "7"}, query=b"q=given") as ctx:
+        ctx.scope["headers"] = [(b"authorization", b"Bearer abc")]
+        for resolver in resolvers:
+            assert await resolver.resolve() == await resolver.resolve(ctx)
+
+
+@pytest.mark.asyncio
+async def test_a_resolver_written_before_the_context_argument_still_binds():
+    """The old ``resolve(self)`` signature is what makes the argument optional."""
+    from fusion.resolvers import MISSING, Resolver
+
+    class Legacy(Resolver):
+        location: typing.ClassVar[str] = "query"
+
+        async def resolve(self) -> tuple[str, typing.Any]:  # type: ignore[override]
+            return self.name, self.context.query_params.get(self.name, MISSING)
+
+    signature = Signature.of(handler, transport=Transport.HTTP)
+    signature.resolvers["q"] = Legacy(name="q", typ=str)
+
+    async with _http_context(path_params={"id": "7"}, query=b"q=legacy"):
+        assert await bind(signature) == {"id": 7, "q": "legacy"}

@@ -1,11 +1,13 @@
 import enum
+import functools
+import inspect
 import typing
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 
 import msgspec
 
-from .context import Context, context
+from .context import Context, current
 from .exceptions import ValidationException
 from .object import MetaObject, Object
 from .responses import FieldError
@@ -41,14 +43,49 @@ class Resolver(Object):
     """Where the value came from.  Doubles as OpenAPI's ``in:`` for the HTTP
     resolvers and as ``FieldError.location`` for every resolver."""
 
+    def __init_subclass__(cls, **kwargs: typing.Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls._adapt_resolve()
+
+    @classmethod
+    def _adapt_resolve(cls) -> None:
+        """Keep a ``resolve(self)`` override working now that ``bind`` passes a context.
+
+        Declaring the parameter optional only helps the caller: an override
+        that never declared it still raises ``TypeError`` when handed one.
+        Wrapping such an override once, as its class is created, means the hot
+        path can pass the context unconditionally and never test for this.
+        """
+        override = cls.__dict__.get("resolve")
+        if override is None or len(inspect.signature(override).parameters) > 1:
+            return
+
+        async def resolve(self: Resolver, ctx: Context | None = None) -> tuple[str, typing.Any]:
+            return await override(self)
+
+        functools.update_wrapper(resolve, override)
+        cls.resolve = resolve  # type: ignore[method-assign]
+
     @property
     def context(self) -> Context:
-        if ctx := context.get(None):
-            return ctx
-        raise RuntimeError("No context available")
+        """The active context, looked up from the contextvar.
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        """Resolve the value from the active context."""
+        ``resolve`` is handed the context outright, so this is the fallback for
+        a resolver written before that argument existed, and for code that
+        reaches for the context outside a resolve call.
+        """
+        return current()
+
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        """Resolve the value from ``ctx``, or from the active context.
+
+        ``bind`` looks the context up once and hands it to every resolver: read
+        through ``self.context`` instead, a handler with five parameters pays
+        for five contextvar lookups to reach the one object they all share.
+        The argument stays optional so an existing resolver, and any caller
+        invoking ``resolve()`` directly, keeps working untouched - which is why
+        each override below opens by falling back to the property.
+        """
         raise NotImplementedError
 
 
@@ -138,8 +175,8 @@ class DependencyResolver(Resolver):
 
     from_factory: bool | None = None
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        ctx = self.context
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        ctx = ctx or self.context
         cache = ctx.dependencies
         if self.typ in cache:
             return self.name, cache[self.typ]
@@ -150,7 +187,7 @@ class DependencyResolver(Resolver):
         if self.from_factory:
             value = await self._from_factory(ctx)
         else:
-            value = await self.typ.instance()
+            value = await self.typ.instance(ctx)
 
         cache[self.typ] = value
         return self.name, value
@@ -182,7 +219,7 @@ class ContextResolver(Resolver):
 
     location: typing.ClassVar[str] = "context"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
         return self.name, self.typ()
 
 
@@ -191,11 +228,11 @@ class ToolArgResolver(Resolver):
 
     location: typing.ClassVar[str] = "argument"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        arguments = self.context.arguments
-        if self.name not in arguments:
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        value = (ctx or self.context).arguments.get(self.name, MISSING)
+        if value is MISSING:
             return self.name, MISSING
-        return self.name, msgspec.convert(arguments[self.name], self.typ, strict=False)
+        return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
 class QueryParamResolver(Resolver):
@@ -203,10 +240,10 @@ class QueryParamResolver(Resolver):
 
     location: typing.ClassVar[str] = "query"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        if self.name not in self.context.query_params:
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        value = (ctx or self.context).query_params.get(self.name, MISSING)
+        if value is MISSING:
             return self.name, MISSING
-        value = self.context.query_params[self.name]
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
@@ -215,10 +252,10 @@ class PathParamResolver(Resolver):
 
     location: typing.ClassVar[str] = "path"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        if self.name not in self.context.path_params:
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        value = (ctx or self.context).path_params.get(self.name, MISSING)
+        if value is MISSING:
             return self.name, MISSING
-        value = self.context.path_params[self.name]
         return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
@@ -227,8 +264,8 @@ class RequestBodyResolver(Resolver):
 
     location: typing.ClassVar[str] = "body"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        body = await self.context.body()
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        body = await (ctx or self.context).body()
 
         is_struct = isinstance(self.typ, type) and (
             issubclass(self.typ, msgspec.Struct) or isinstance(self.typ, MetaObject)
@@ -291,11 +328,11 @@ class HeaderResolver(Resolver):
 
     location: typing.ClassVar[str] = "header"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        headers = self.context.headers
-        if self.name not in headers:
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        value = (ctx or self.context).header(self.name)
+        if value is None:
             return self.name, MISSING
-        return self.name, msgspec.convert(headers[self.name], self.typ, strict=False)
+        return self.name, msgspec.convert(value, self.typ, strict=False)
 
 
 class CookieResolver(Resolver):
@@ -303,11 +340,10 @@ class CookieResolver(Resolver):
 
     location: typing.ClassVar[str] = "cookie"
 
-    async def resolve(self) -> tuple[str, typing.Any]:
-        cookies = {
-            key.lower().replace("-", "_").replace(" ", "_"): value
-            for key, value in self.context.cookies.items()
-        }
-        if self.name not in cookies:
+    async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
+        # Context.cookies has already normalised its keys; re-normalising them
+        # here would be the same work twice.
+        value = (ctx or self.context).cookies.get(self.name, MISSING)
+        if value is MISSING:
             return self.name, MISSING
-        return self.name, msgspec.convert(cookies[self.name], self.typ, strict=False)
+        return self.name, msgspec.convert(value, self.typ, strict=False)

@@ -331,3 +331,72 @@ async def test_a_path_param_absent_from_the_scope_is_reported_as_missing():
             await bind(signature)
 
     assert excinfo.value.errors[0].message == "Missing required value"
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        b"",
+        b"a=1",
+        b"a=1&b=2",
+        b"a",
+        b"a=",
+        b"&&",
+        b"a=1&a=2",
+        b"=v",
+        b"a=1&",
+        b"a==1",
+        b"tags:list=x,y,z",
+        b"a%20b=c%20d",
+        b"a+b=c+d",
+        b"x=%E2%9C%93",
+        b"a=1&b=%20",
+    ],
+)
+def test_the_query_split_agrees_with_parse_qsl(query_string):
+    """The hand-rolled split is only a shortcut if it answers identically."""
+    from urllib.parse import parse_qsl
+
+    from fusion.context import Context
+
+    expected: dict[str, typing.Any] = {}
+    for name, value in parse_qsl(query_string.decode()):
+        if name.endswith(":list"):
+            expected[name[:-5]] = value.split(",")
+        else:
+            expected[name] = value
+
+    context = Context({"query_string": query_string}, None, None)  # type: ignore[arg-type]
+    assert context.query_params == expected
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("content_type", "application/json"),
+        ("x_request_id", "abc"),
+        ("host", "example.com"),
+        ("empty", ""),
+        ("missing", None),
+        ("content", None),
+        ("Content_Type", None),
+    ],
+)
+def test_a_single_header_reads_the_same_either_way(name, expected):
+    """The scan is a shortcut past ``headers``, so it must agree with it."""
+    from fusion.context import Context
+
+    scope = {
+        "headers": [
+            (b"Host", b"example.com"),
+            (b"Content-Type", b"application/json"),
+            (b"X-Request-Id", b"abc"),
+            (b"empty", b""),
+        ]
+    }
+
+    scanned = Context(scope, None, None).header(name)  # type: ignore[arg-type]
+
+    materialised = Context(scope, None, None)  # type: ignore[arg-type]
+    assert materialised.headers  # force the cached table, taking the other branch
+    assert scanned == materialised.header(name) == expected
