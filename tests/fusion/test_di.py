@@ -256,15 +256,126 @@ async def test_several_objects_are_merged():
         assert (await client.get("/s")).json() == {"value": "postgres://test"}
 
 
-def test_one_route_object_may_not_be_wired_by_two_applications():
+def test_one_route_object_may_not_be_wired_by_two_sets_of_factories():
     async def handler(db: Inject[Database]) -> Response[Out]:
         return Response(Out(value=db.url))
 
     routes = [Get("/db", handler)]
     Fusion(routes=routes, factories=Deps())
 
-    with pytest.raises(ValueError, match="belongs to one application"):
+    with pytest.raises(ValueError, match="belongs to one of them"):
         Fusion(routes=routes, factories=Deps())
+
+
+@pytest.mark.asyncio
+async def test_one_route_object_may_be_wired_twice_from_the_same_factories():
+    """The guard is against two answers for one type, not against two applications."""
+
+    async def handler(db: Inject[Database]) -> Response[Out]:
+        return Response(Out(value=db.url))
+
+    deps = Deps()
+    routes = [Get("/db", handler)]
+    Fusion(routes=routes, factories=deps)
+
+    async with client_for(Fusion(routes=routes, factories=deps)) as client:
+        assert (await client.get("/db")).json() == {"value": "postgres://test"}
+
+
+@pytest.mark.asyncio
+async def test_two_applications_may_inject_the_same_injectable():
+    """An Injectable's resolver table is class-level, so it belongs to no application."""
+
+    class Group(Injectable):
+        db: Inject[Database]
+
+    async def handler(deps: Inject[Group]) -> Response[Out]:
+        return Response(Out(value=deps.db.url))
+
+    first = Fusion(routes=[Get("/deps", handler)], factories=Deps(url="one"))
+    second = Fusion(routes=[Get("/deps", handler)], factories=Deps(url="two"))
+
+    async with client_for(first) as client:
+        assert (await client.get("/deps")).json() == {"value": "one"}
+    async with client_for(second) as client:
+        assert (await client.get("/deps")).json() == {"value": "two"}
+
+
+def test_a_shared_route_reaching_a_factory_through_an_injectable_is_refused_too():
+    """The disagreement is the same one; only the resolver it is reached through differs."""
+
+    class Group(Injectable):
+        db: Inject[Database]
+
+    async def handler(deps: Inject[Group]) -> Response[Out]:
+        return Response(Out(value=deps.db.url))
+
+    routes = [Get("/deps", handler)]
+    Fusion(routes=routes, factories=Deps(url="one"))
+
+    with pytest.raises(ValueError, match="Group is already wired"):
+        Fusion(routes=routes, factories=Deps(url="two"))
+
+
+@pytest.mark.asyncio
+async def test_a_shared_route_reaching_an_injectable_may_be_wired_from_one_object():
+    class Group(Injectable):
+        db: Inject[Database]
+
+    async def handler(deps: Inject[Group]) -> Response[Out]:
+        return Response(Out(value=deps.db.url))
+
+    deps = Deps()
+    routes = [Get("/deps", handler)]
+    Fusion(routes=routes, factories=deps)
+
+    async with client_for(Fusion(routes=routes, factories=deps)) as client:
+        assert (await client.get("/deps")).json() == {"value": "postgres://test"}
+
+
+def test_wiring_leaves_the_injectable_class_untouched():
+    """Settling a class table would decide how it is built everywhere, forever."""
+    from fusion.resolvers import DependencyResolver
+
+    class Group(Injectable):
+        db: Inject[Database]
+
+    async def handler(deps: Inject[Group]) -> Response[Out]:
+        return Response(Out(value=deps.db.url))
+
+    route = Get("/deps", handler)
+    Fusion(routes=[route], factories=Deps())
+
+    field = Group.__resolvers__["db"]
+    assert isinstance(field, DependencyResolver)
+    assert field.provider is None
+    assert field.from_factory is None
+
+    site = route.signature.resolvers["deps"]
+    assert isinstance(site, DependencyResolver)
+    assert site.fields is not None
+    assert site.fields["db"] is not field
+    assert site.fields["db"].provider is not None
+
+
+@pytest.mark.asyncio
+async def test_a_nested_injectable_is_settled_per_site_as_well():
+    class Inner(Injectable):
+        db: Inject[Database]
+
+    class Outer(Injectable):
+        inner: Inject[Inner]
+
+    async def handler(outer: Inject[Outer]) -> Response[Out]:
+        return Response(Out(value=outer.inner.db.url))
+
+    first = Fusion(routes=[Get("/n", handler)], factories=Deps(url="one"))
+    second = Fusion(routes=[Get("/n", handler)], factories=Deps(url="two"))
+
+    async with client_for(first) as client:
+        assert (await client.get("/n")).json() == {"value": "one"}
+    async with client_for(second) as client:
+        assert (await client.get("/n")).json() == {"value": "two"}
 
 
 def test_factory_requires_a_return_annotation():

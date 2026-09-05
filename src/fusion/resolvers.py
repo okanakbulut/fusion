@@ -173,6 +173,13 @@ class DependencyResolver(Resolver):
     """``Signature`` of the factory that builds ``typ``, when one does.  Set by
     ``di.settle`` at construction, which is why nothing is looked up per call."""
 
+    fields: dict[str, Resolver] | None = None
+    """This site's own copy of an ``Injectable``'s resolver table, settled for
+    one application.  ``Injectable.__resolvers__`` is built once per class and
+    shared by every application in the process, so it is read here and never
+    written to; None means nothing wired this site and the class builds itself
+    from its own table."""
+
     async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
         ctx = ctx or self.context
         cache = ctx.dependencies
@@ -185,7 +192,7 @@ class DependencyResolver(Resolver):
         if self.from_factory:
             value = await self._from_factory(ctx)
         else:
-            value = await self.typ.instance(ctx)
+            value = await self.typ.instance(ctx, self.fields)
 
         cache[self.typ] = value
         return self.name, value

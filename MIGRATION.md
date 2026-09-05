@@ -227,17 +227,28 @@ ordering between a factory and the handler that injects it to get wrong. The
 injectable-vs-factory question is settled once when the application is constructed rather than on
 first use.
 
-### One `Route` object belongs to one application
+### One `Route` object belongs to one set of factories
 
-Wiring happens on the resolvers a `Route` owns, so the same `Route` **object** cannot be registered
-with two applications. Sharing a handler *function* is still free — every `Get("/x", handler)` builds
-its own resolvers — but a module-level `ROUTES = [...]` reused by an app and its tests now needs a
-list per application. This is reported at construction:
+Wiring happens on the resolvers a `Route` owns, so a module-level `ROUTES = [...]` shared by an app
+and its tests is only safe while both wire it the same way. Two applications built from the **same**
+factories object may share the list — the answer for every type is the same one, so there is nothing
+to disagree about. Two applications built from **different** factories objects may not, and it is
+reported at construction rather than becoming a route served by whichever application was built last:
 
 ```
-ValueError: Route '/thing' is already wired by another application, which would leave Db built
-by whichever constructed it last. A Route belongs to one application - build the routes for each.
+ValueError: Route '/thing' is already wired by another application whose factory for Db is a
+different one, which would leave it built by whichever application was constructed last. A Route
+wired by two sets of factories belongs to one of them - build the routes for each.
 ```
+
+An app under test alongside the real one is exactly that case — `FakeDeps()` is a different object
+from `Deps()` — so give the application under test its own route list. Sharing a handler *function*
+is always free: every `Get("/x", handler)` builds its own resolvers.
+
+An `Injectable` carries no such restriction. Its resolver table is built once per class and belongs
+to no application, so `settle` copies it per injection site: any number of applications may inject
+the same `Injectable`, each building its fields from its own factories, and none of them writes
+anything to the class.
 
 ---
 
@@ -481,7 +492,7 @@ Real messages, and what they mean:
 | `Fusion(factories=...) expects an instance, got the class 'Deps' itself` | passed the class | `Deps(...)` |
 | `'Deps.b' produces DB, which 'Deps.a' already produces` | two factories for one type | keep one; to override, reuse the method name (§3) |
 | `Factories cannot be resolved: DB needs Session needs DB` | factories depend on each other | break the cycle; one of them takes what it needs as a field |
-| `Route '/x' is already wired by another application` | one `Route` object, two apps | build the route list per application (§3) |
+| `Route '/x' is already wired by another application whose factory for DB is a different one` | one `Route` object, two different factories objects | build the route list per application (§3) |
 
 ---
 
@@ -498,7 +509,7 @@ Real messages, and what they mean:
 - [ ] Every `@factory` collected onto an `Object` and passed as `Fusion(factories=...)`
 - [ ] Registration-only imports (`import ...di  # noqa: F401`) deleted
 - [ ] Test doubles rewritten as subclasses; any `__factories__` save/restore fixture deleted
-- [ ] Route lists shared between an app and its tests split per application
+- [ ] Route lists shared by applications with *different* factories split per application
 - [ ] Clients re-checked for falsy response content (`0`, `[]`, `{}` instead of `""`)
 - [ ] `fusion.renderers` imports removed
 - [ ] Tests updated — handlers defined inside test bodies are the bulk of the work
