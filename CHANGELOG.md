@@ -1,3 +1,9 @@
+## v0.13.1 (2026-09-05)
+
+### Fix
+
+- settle Injectable dependencies per injection site
+
 ## v0.13.0 (2026-09-05)
 
 ### Refactor
