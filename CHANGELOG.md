@@ -1,3 +1,13 @@
+## v0.12.0 (2026-09-05)
+
+### Refactor
+
+- function handlers, function middleware, declarative auth
+
+### Perf
+
+- micro-optimise per-request parameter binding
+
 ## v0.11.1 (2026-09-02)
 
 ## v0.11.0 (2026-08-30)
