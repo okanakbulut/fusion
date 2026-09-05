@@ -83,10 +83,6 @@ def test_injected_params_are_not_in_the_schema():
     class Database:
         pass
 
-    @factory
-    async def db_factory() -> Database:
-        return Database()
-
     async def tool(q: Tool.Arg[str], db: Inject[Database]) -> Response[User]: ...
 
     schema = build_input_schema(ToolDef(tool).signature)
@@ -132,20 +128,22 @@ async def test_tool_call_gets_dependency_injection_and_teardown():
     class Session:
         pass
 
-    @factory
-    @asynccontextmanager
-    async def session_factory() -> AsyncIterator[Session]:
-        events.append("open")
-        try:
-            yield Session()
-        finally:
-            events.append("close")
+    class Deps(Object):
+        @factory
+        @asynccontextmanager
+        async def session(self) -> AsyncIterator[Session]:
+            events.append("open")
+            try:
+                yield Session()
+            finally:
+                events.append("close")
 
     async def tool(q: Tool.Arg[str], session: Inject[Session]) -> Response[str]:
         events.append("call")
         return Response(content=q)
 
-    await ToolDef(tool).call({"q": "x"})
+    app = Fusion(tools=[tool], factories=Deps())
+    await app.tools["tool"].call({"q": "x"})
 
     assert events == ["open", "call", "close"]
 

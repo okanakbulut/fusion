@@ -190,10 +190,11 @@ app = Fusion(routes=[
 
 ### Dependency injection
 
-Register a factory for any type, then ask for it with `Inject[T]`.
+Ask for a dependency with `Inject[T]`, and give the application an object whose `@factory` methods
+know how to build one.
 
 ```python
-from fusion import Inject, factory
+from fusion import Fusion, Get, Inject, Object, factory
 
 
 class Database:
@@ -201,41 +202,79 @@ class Database:
         self.dsn = dsn
 
 
-@factory
-async def database_factory() -> Database:
-    return Database("postgresql://localhost/mydb")
+class Deps(Object):
+    dsn: str
+
+    @factory
+    async def database(self) -> Database:
+        return Database(self.dsn)
 
 
 async def status(db: Inject[Database]) -> Response[Object]:
     ...
+
+
+app = Fusion(routes=[Get("/status", status)], factories=Deps(dsn="postgresql://localhost/mydb"))
 ```
+
+The object is configuration as much as wiring — it is an ordinary `Object`, so its fields are
+validated like any other struct, and a factory reads them off `self`.
+
+Nothing is registered globally, and nothing is registered by importing a module. An `Inject[T]` with
+no factory to build it is refused **when the application is constructed**, naming the route and the
+parameter, rather than failing on whichever request reaches that route first.
 
 A dependency is constructed **once per call** — two parameters asking for the same type share one
 instance.
 
-Wrap a factory in `@asynccontextmanager` for setup and teardown. Teardown runs after the response
-is sent, and after a stream finishes:
+A factory may depend on other dependencies, which resolve through that same per-call cache:
 
 ```python
-@factory
-@asynccontextmanager
-async def session_factory() -> AsyncIterator[Session]:
-    session = Session()
-    try:
-        yield session
-    finally:
-        await session.close()
+class Deps(Object):
+    dsn: str
+
+    @factory
+    async def database(self) -> Database:
+        return Database(self.dsn)
+
+    @factory
+    @asynccontextmanager
+    async def session(self, db: Inject[Database]) -> AsyncIterator[Session]:
+        session = db.session()
+        try:
+            yield session
+        finally:
+            await session.close()
 ```
 
-`Injectable` composes dependencies into a reusable group:
+Wrapping a factory in `@asynccontextmanager` gives it setup and teardown. Teardown runs after the
+response is sent, and after a stream finishes.
+
+Swap a dependency by subclassing — an override reuses the method name, and the rest of the object
+comes along unchanged:
 
 ```python
-class Deps(Injectable):
+class FakeDeps(Deps):
+    @factory
+    async def database(self) -> Database:
+        return FakeDatabase()
+
+
+app = Fusion(routes=[...], factories=FakeDeps(dsn="unused"))
+```
+
+Two applications hold two objects, so a test never disturbs what another test sees. Pass a list to
+compose several: `Fusion(factories=[CoreDeps(...), BillingDeps(...)])`.
+
+`Injectable` composes dependencies into a reusable group, and needs no factory — it builds itself:
+
+```python
+class Handles(Injectable):
     db: Inject[Database]
     session: Inject[Session]
 
 
-async def handler(deps: Inject[Deps]) -> Response[Object]: ...
+async def handler(deps: Inject[Handles]) -> Response[Object]: ...
 ```
 
 ---

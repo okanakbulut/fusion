@@ -14,9 +14,6 @@ from .responses import FieldError
 from .types import Transport
 
 T = typing.TypeVar("T")
-type Constructor[T] = typing.Callable[[], typing.Awaitable[T] | AbstractAsyncContextManager[T]]
-
-__factories__: dict[type[typing.Any], Constructor[typing.Any]] = {}
 
 
 class _Missing(enum.Enum):
@@ -27,10 +24,6 @@ MISSING = _Missing.MISSING
 """Sentinel returned by a resolver when its value is absent from the request,
 so the binder can omit the argument entirely and let the parameter's own
 default apply, instead of forcing a conversion of ``None``."""
-
-
-def has_factory(typ: type[typing.Any]) -> bool:
-    return typ in __factories__
 
 
 class Resolver(Object):
@@ -165,15 +158,20 @@ class DependencyResolver(Resolver):
     """Resolver for a bare ``Inject[T]``, dispatching on how ``T`` is provided.
 
     ``Inject`` is one marker over two mechanisms - an ``Injectable`` subclass
-    builds itself, a factory-backed type is built by its factory.  Which one
-    applies is decided on first use and remembered, so a request never repeats
-    the check, yet a factory registered after the handler was defined is still
-    picked up.
+    builds itself, any other type is built by a ``@factory``.  Which one applies
+    is settled when the application is constructed, so a request never asks: the
+    resolver arrives at its first call already holding the factory that answers
+    it.
     """
 
     location: typing.ClassVar[str] = "dependency"
 
     from_factory: bool | None = None
+    """Which mechanism builds ``typ``, or None until an application settles it."""
+
+    provider: typing.Any = None
+    """``Signature`` of the factory that builds ``typ``, when one does.  Set by
+    ``di.settle`` at construction, which is why nothing is looked up per call."""
 
     async def resolve(self, ctx: Context | None = None) -> tuple[str, typing.Any]:
         ctx = ctx or self.context
@@ -193,22 +191,30 @@ class DependencyResolver(Resolver):
         return self.name, value
 
     def _resolve_kind(self) -> bool:
+        """Settle a resolver no application wired, where the answer is structural.
+
+        Everything reached through ``Fusion(...)`` was settled at construction.
+        This is the path for an ``Injectable`` instantiated on its own, which
+        still knows how to build itself; a factory-backed type has nowhere to
+        look, because there is no longer anywhere to look.
+        """
         from .injectable import Injectable
 
         if isinstance(self.typ, type) and issubclass(self.typ, Injectable):
             return False
-        if has_factory(self.typ):
-            return True
         raise RuntimeError(
-            f"Cannot inject {self.typ!r} for {self.name!r}: it is neither an Injectable "
-            f"subclass nor a type with a registered @factory."
+            f"Cannot inject {self.typ!r} for {self.name!r}: it is not an Injectable subclass, "
+            f"and no factory was wired for it. Pass an object carrying an @factory that "
+            f"produces it as Fusion(factories=...)."
         )
 
     async def _from_factory(self, ctx: Context) -> typing.Any:
-        factory = __factories__.get(self.typ)
-        if factory is None:  # pragma: no cover - registry emptied after first use
-            raise RuntimeError(f"No factory found for {self.typ}")
-        produced = factory()
+        # Imported here because binding imports this module at load time.  A
+        # factory binds like a handler, which is what lets it declare
+        # dependencies of its own.
+        from .binding import bind
+
+        produced = self.provider.func(**await bind(self.provider))
         if isinstance(produced, AbstractAsyncContextManager):
             return await ctx.enter_async_context(produced)
         return await produced

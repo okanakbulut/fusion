@@ -40,9 +40,10 @@ class Database:
     pass
 
 
-@factory
-async def db_factory() -> Database:
-    return Database()
+class Deps(Object):
+    @factory
+    async def database(self) -> Database:
+        return Database()
 
 
 async def get_user(id: Http.Path[int], db: Inject[Database]) -> Response[User] | NotFound:
@@ -207,7 +208,7 @@ def test_response_arms_ignores_arms_without_a_status():
 
 @pytest.mark.asyncio
 async def test_openapi_is_served_and_cached():
-    app = Fusion(routes=[Get("/users/{id:int}", get_user), openapi_route()])
+    app = Fusion(routes=[Get("/users/{id:int}", get_user), openapi_route()], factories=Deps())
     async with client_for(app) as client:
         response = await client.get("/openapi.json")
 
@@ -218,7 +219,7 @@ async def test_openapi_is_served_and_cached():
 
 @pytest.mark.asyncio
 async def test_openapi_with_overrides_is_not_cached():
-    app = Fusion(routes=[Get("/users/{id:int}", get_user)])
+    app = Fusion(routes=[Get("/users/{id:int}", get_user)], factories=Deps())
     assert app.openapi(title="One")["info"]["title"] == "One"
     assert app.openapi()["info"]["title"] == "Fusion"
 

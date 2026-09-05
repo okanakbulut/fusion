@@ -215,7 +215,7 @@ async def test_injecting_a_type_with_no_provider():
         pass
 
     async with _http_context():
-        with pytest.raises(RuntimeError, match="neither an Injectable"):
+        with pytest.raises(RuntimeError, match="not an Injectable subclass"):
             await DependencyResolver(name="x", typ=Orphan).resolve()
 
 
@@ -236,7 +236,7 @@ async def test_a_dependency_is_cached_per_context():
 
 @pytest.mark.asyncio
 async def test_a_dependency_kind_is_decided_once_and_reused():
-    """The injectable-vs-factory choice is made on first use, not per request."""
+    """An Injectable no application wired still settles itself, once."""
     from fusion import Injectable
     from fusion.resolvers import DependencyResolver
 

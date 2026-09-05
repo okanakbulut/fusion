@@ -378,14 +378,15 @@ async def test_execute_tears_down_its_dependencies():
     class Session:
         pass
 
-    @factory
-    @asynccontextmanager
-    async def session_factory() -> AsyncIterator[Session]:
-        events.append("open")
-        try:
-            yield Session()
-        finally:
-            events.append("close")
+    class Deps(Object):
+        @factory
+        @asynccontextmanager
+        async def session(self) -> AsyncIterator[Session]:
+            events.append("open")
+            try:
+                yield Session()
+            finally:
+                events.append("close")
 
     async def inner(session: Inject[Session]) -> Response[Out]:
         return Response(Out(value="inner"))
@@ -395,7 +396,7 @@ async def test_execute_tears_down_its_dependencies():
         events.append("after-execute")
         return Response(Out(value="ok"))
 
-    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)])
+    app = Fusion(routes=[Get("/inner", inner), Get("/outer", outer)], factories=Deps())
     async with client_for(app) as client:
         await client.get("/outer")
 
