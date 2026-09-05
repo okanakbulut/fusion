@@ -127,20 +127,21 @@ async def test_dependency_teardown_runs_after_a_stream_completes():
     class Session:
         pass
 
-    @factory
-    @asynccontextmanager
-    async def session_factory() -> AsyncIterator[Session]:
-        events.append("open")
-        try:
-            yield Session()
-        finally:
-            events.append("close")
+    class Deps(Object):
+        @factory
+        @asynccontextmanager
+        async def session(self) -> AsyncIterator[Session]:
+            events.append("open")
+            try:
+                yield Session()
+            finally:
+                events.append("close")
 
     async def handler(session: Inject[Session]) -> AsyncIterator[Event[Tick]]:
         events.append("stream")
         yield Event(data=Tick(n=1))
 
-    app = Fusion(routes=[Get("/s", handler)])
+    app = Fusion(routes=[Get("/s", handler)], factories=Deps())
     async with client_for(app) as client:
         await client.get("/s")
 

@@ -3,6 +3,7 @@ import logging
 import typing
 from urllib.parse import parse_qsl, urlencode
 
+from .di import collect_factories, settle
 from .exceptions import ProblemException, ValidationException
 from .object import Object
 from .protocols import Authorizer
@@ -99,6 +100,7 @@ class Fusion:
         *,
         routes: list[Route] | None = None,
         tools: list[typing.Any] | None = None,
+        factories: typing.Any = None,
         lifespan: Lifespan = default_lifespan,
         authorizer: Authorizer | None = None,
     ) -> None:
@@ -109,6 +111,7 @@ class Fusion:
         # the list; tools/list and OpenAPI both need a flat registry to walk.
         self.router = TreeRouter(routes=self.routes)
         self.tools = self._register_tools(tools or [])
+        self._wire(factories)
         self.lifespan = lifespan
         self._openapi: dict[str, typing.Any] | None = None
 
@@ -123,6 +126,26 @@ class Fusion:
                     f"built without an authorizer. Pass Fusion(authorizer=...) with something "
                     f"that implements 'async def authorize(roles) -> bool'."
                 )
+
+    def _wire(self, factories: typing.Any) -> None:
+        """Settle every Inject[T] these routes and tools declare, or refuse to build.
+
+        An ``Inject[T]`` with nothing to build it is the same silent hole
+        ``_check_authorizer`` refuses one field over, and it used to surface as a
+        500 on whichever request reached the route first.
+
+        Nothing is kept.  The resolvers reached here come away holding the
+        factory that answers them, so the application carries no dependency
+        state and a request pays nothing to reach it.  Tools are wired as well,
+        which is why this runs after they are registered: a tool's parameters
+        are dependencies exactly as a route's are.
+        """
+        collected = collect_factories(factories)
+        for route in self.routes:
+            for signature in (route.signature, *route.middlewares):
+                settle(signature.resolvers, collected, f"Route {route.path!r}")
+        for name, tool in self.tools.items():
+            settle(tool.signature.resolvers, collected, f"Tool {name!r}")
 
     def openapi(self, **kwargs: typing.Any) -> dict[str, typing.Any]:
         """Generate (and cache) this application's OpenAPI document."""

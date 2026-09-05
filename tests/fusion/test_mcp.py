@@ -184,15 +184,16 @@ async def test_tool_call_over_mcp_gets_dependency_injection():
     class Database:
         url = "postgres://test"
 
-    @factory
-    async def db_factory() -> Database:
-        return Database()
+    class Deps(Object):
+        @factory
+        async def database(self) -> Database:
+            return Database()
 
     async def whoami(db: Inject[Database]) -> Response[str]:
         """Report the database URL."""
         return Response(content=db.url)
 
-    app = Fusion(routes=[mcp_route()], tools=[whoami])
+    app = Fusion(routes=[mcp_route()], tools=[whoami], factories=Deps())
     async with client_for(app) as client:
         result = (await rpc(client, "tools/call", {"name": "whoami", "arguments": {}}))["result"]
 

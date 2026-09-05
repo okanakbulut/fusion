@@ -30,6 +30,7 @@ OpenAPI operations and MCP tool schemas.
 | `Fusion.dispatch(path, method, params)` | `Fusion.execute(method, path, ...)` — see §8 |
 | `fusion.types.Match`, `HttpRoute.match` | *(removed — never implemented)* |
 | `InjectableResolver`, `FactoryResolver` | `DependencyResolver` |
+| `fusion.resolvers.__factories__`, `has_factory` | *(removed — see §3)* |
 
 New exports: `Http`, `Tool`, `Inject`, `FromContext`, `Auth`, `requires`, `Authorizer`,
 `Credentials`, `Event`, `EventStream`, `ToolDef`, `Transport`, `Signature`, `bind`, `field`,
@@ -129,11 +130,114 @@ class Deps(Injectable):
     session: Inject[Session]
 ```
 
-`@factory` itself is unchanged, including the `@asynccontextmanager` form for teardown.
+### Factories move onto an object
 
-One constraint is **lifted**: a factory no longer has to be registered before the consuming class or
-function is defined. The injectable-vs-factory decision is now made on first use rather than at
-class-creation time, so import order between `@factory` and its consumers stops mattering.
+`@factory` no longer registers anything. It marks a function as producing its return type, and the
+factories for an application are collected from an object you hand it.
+
+**Before** — the registry was process-wide and filled as a side effect of importing the module,
+which is why wiring an application meant an import that referenced no name:
+
+```python
+# di.py
+@factory
+async def database_factory() -> Database:
+    return Database(DSN)
+
+@factory
+@asynccontextmanager
+async def session_factory() -> AsyncIterator[Session]:
+    async with Database(DSN).session() as s:   # no way to ask for the Database
+        yield s
+
+# app.py
+import myapp.di  # noqa: F401
+app = Fusion(routes=[...])
+```
+
+**After** — the factories are methods on a plain `Object`, and the application is given that object:
+
+```python
+# di.py
+class Deps(Object):
+    dsn: str
+
+    @factory
+    async def database(self) -> Database:
+        return Database(self.dsn)
+
+    @factory
+    @asynccontextmanager
+    async def session(self, db: Inject[Database]) -> AsyncIterator[Session]:
+        async with db.session() as s:
+            yield s
+
+# app.py
+from .di import Deps
+app = Fusion(routes=[...], factories=Deps(dsn=DSN))
+```
+
+Per application, mechanically:
+
+- Collect every `@factory` function into one class inheriting `Object`, and give each one `self`.
+- Delete the `import ...  # noqa: F401` lines whose only job was executing those registrations.
+- Pass the instance as `Fusion(factories=...)`. Several objects can be passed as a list.
+- Move the module-level constants the factories closed over onto the class as fields. They are
+  validated like any other `Object` field.
+- Drop any import of `fusion.resolvers.__factories__` or `has_factory`; both are gone.
+
+Two things you get in exchange. **A factory may now declare dependencies of its own** — it binds like
+a handler, so `Inject[...]` in its signature resolves through the same per-call cache. And **a missing
+factory is refused when the application is constructed**, naming the route and the parameter, instead
+of reaching a caller as a 500 on whichever request hits that route first:
+
+```
+ValueError: Route '/thing' injects Db for 'db', but this application was built without a
+factory for it. Add an @factory method producing Db to the object you pass as
+Fusion(factories=...).
+```
+
+### Test doubles replace a subclass, not a global
+
+```python
+# before — mutated state every other test shared, and needed save/restore around it
+__factories__[Database] = fake_db_factory
+
+# after
+class FakeDeps(Deps):
+    @factory
+    async def database(self) -> Database:
+        return FakeDatabase()
+
+app = Fusion(routes=[...], factories=FakeDeps(dsn="unused"))
+```
+
+An override has to **reuse the method name** — that is what makes it replace the one above it in the
+MRO. Overriding under a different name leaves both factories claiming the same type, which is an
+error naming both.
+
+If you kept a fixture that saved and restored `__factories__` between tests, delete it rather than
+adapting it. Two applications now hold two objects, so there is nothing left to leak.
+
+### Import order still does not matter
+
+The previous release lifted the requirement that a factory be registered before its consumers were
+defined. That still holds, for a better reason: factory methods live in a class body, so there is no
+ordering between a factory and the handler that injects it to get wrong. The
+injectable-vs-factory question is settled once when the application is constructed rather than on
+first use.
+
+### One `Route` object belongs to one application
+
+Wiring happens on the resolvers a `Route` owns, so the same `Route` **object** cannot be registered
+with two applications. Sharing a handler *function* is still free — every `Get("/x", handler)` builds
+its own resolvers — but a module-level `ROUTES = [...]` reused by an app and its tests now needs a
+list per application. This is reported at construction:
+
+```
+ValueError: Route '/thing' is already wired by another application, which would leave Db built
+by whichever constructed it last. A Route belongs to one application - build the routes for each.
+```
 
 ---
 
@@ -335,8 +439,26 @@ app = Fusion(routes=[mcp_route()], tools=[search_users])
 **OpenAPI** — `Fusion(routes=[..., openapi_route()])` serves an OpenAPI 3.1 document at
 `/openapi.json`, derived from the same signatures.
 
+**Dependencies that build dependencies** — a factory binds like a handler, so it can inject what it
+needs instead of reaching for a global:
+
+```python
+class Deps(Object):
+    dsn: str
+
+    @factory
+    async def database(self) -> Database:
+        return Database(self.dsn)
+
+    @factory
+    async def repo(self, db: Inject[Database]) -> Repository:
+        return Repository(db)
+```
+
 Mixing transports is rejected when the app is constructed, not on the first call: registering a
-handler carrying an `Http.*` marker as a tool raises immediately and names the parameter.
+handler carrying an `Http.*` marker as a tool raises immediately and names the parameter. So is an
+unprovided dependency, and a cycle between two factories — `Fusion(...)` walks the whole graph before
+it will build.
 
 ---
 
@@ -354,6 +476,12 @@ Real messages, and what they mean:
 | `Tool 'x' is an async generator, but a tool call has no streaming result shape` | streaming tool | return a `Response`; streaming is HTTP-only |
 | `type object 'Problem' has no attribute 'status'` | renamed attribute | `status_code` (§5) |
 | `Handler 'H' must be defined with 'async def'` | **usually a class was passed** | the message is misleading here — if `H` is a class, rewrite it as a function (§2) |
+| `cannot import name '__factories__' from 'fusion.resolvers'` | the global registry is gone | collect the factories onto an object (§3) |
+| `Route '/x' injects DB for 'db', but this application was built without a factory for it` | factory never reached the app | pass the object as `Fusion(factories=...)` (§3) |
+| `Fusion(factories=...) expects an instance, got the class 'Deps' itself` | passed the class | `Deps(...)` |
+| `'Deps.b' produces DB, which 'Deps.a' already produces` | two factories for one type | keep one; to override, reuse the method name (§3) |
+| `Factories cannot be resolved: DB needs Session needs DB` | factories depend on each other | break the cycle; one of them takes what it needs as a field |
+| `Route '/x' is already wired by another application` | one `Route` object, two apps | build the route list per application (§3) |
 
 ---
 
@@ -367,13 +495,17 @@ Real messages, and what they mean:
 - [ ] Custom `Problem` subclasses use `status_code`
 - [ ] Paths registered with `methods=[...]` re-checked for overwrites
 - [ ] Factories with side effects re-checked against per-call caching
+- [ ] Every `@factory` collected onto an `Object` and passed as `Fusion(factories=...)`
+- [ ] Registration-only imports (`import ...di  # noqa: F401`) deleted
+- [ ] Test doubles rewritten as subclasses; any `__factories__` save/restore fixture deleted
+- [ ] Route lists shared between an app and its tests split per application
 - [ ] Clients re-checked for falsy response content (`0`, `[]`, `{}` instead of `""`)
 - [ ] `fusion.renderers` imports removed
 - [ ] Tests updated — handlers defined inside test bodies are the bulk of the work
 
 ---
 
-## 8. `dispatch` → `execute`
+## 10. `dispatch` → `execute`
 
 `Fusion.dispatch` is gone. It returned a live response object, could not send a body, and handed
 back `None` for an unknown path — workable for calling one route, wrong for running a batch.
