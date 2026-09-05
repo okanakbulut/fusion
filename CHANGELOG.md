@@ -1,3 +1,9 @@
+## v0.13.0 (2026-09-05)
+
+### Refactor
+
+- factories move onto an object, wired at construction
+
 ## v0.12.0 (2026-09-05)
 
 ### Refactor
