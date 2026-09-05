@@ -32,10 +32,22 @@ class Injectable(Object):
         )
 
     @classmethod
-    async def instance(cls, ctx: Context | None = None) -> typing.Self:
+    async def instance(
+        cls, ctx: Context | None = None, resolvers: dict[str, Resolver] | None = None
+    ) -> typing.Self:
+        """Build an instance, resolving each field from ``ctx``.
+
+        ``resolvers`` is the table an application settled for one injection
+        site; it stands in for the class's own because ``__resolvers__`` is
+        shared by every application in the process and so is never wired.
+        Omitting it builds from the class table, which is what an ``Injectable``
+        instantiated outside any application has.
+        """
         params: dict[str, typing.Any] = {}
         ctx = ctx or current()
-        for resolver in cls.__resolvers__.values():
+        if resolvers is None:
+            resolvers = cls.__resolvers__
+        for resolver in resolvers.values():
             name, value = await resolver.resolve(ctx)
             if value is not MISSING:
                 params[name] = value

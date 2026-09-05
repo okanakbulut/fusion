@@ -128,6 +128,22 @@ def _factory_signature(bound: typing.Any, where: str) -> Signature:
     )
 
 
+def _site_table(resolvers: dict[str, Resolver]) -> dict[str, Resolver]:
+    """A copy of an ``Injectable``'s resolver table for one injection site to settle.
+
+    ``__resolvers__`` is built once per class and shared by every application in
+    the process, so settling it in place would let whichever application was
+    constructed last decide how that class is built everywhere - including
+    outside any application at all.  Only a ``DependencyResolver`` carries
+    settled state, so only those are copied; the rest read the request and are
+    the same wherever they are read from.
+    """
+    return {
+        name: DependencyResolver(name=r.name, typ=r.typ) if isinstance(r, DependencyResolver) else r
+        for name, r in resolvers.items()
+    }
+
+
 def settle(
     resolvers: dict[str, Resolver],
     factories: dict[type[typing.Any], Signature],
@@ -142,6 +158,14 @@ def settle(
     already holding the factory that answers it - and what turns a dependency
     cycle from a recursion that exhausts the stack into a sentence naming the
     loop.
+
+    An ``Injectable`` is settled onto a copy of its class table, one per site,
+    because the class table itself belongs to no application.  Two applications
+    may therefore inject the same ``Injectable`` and build its fields from
+    different factories, and neither disturbs the other or the class.  A site
+    already settled is settled again in place rather than rebuilt, so a
+    ``Route`` shared by two applications reaches the same disagreement check
+    through an ``Injectable`` as it does directly.
     """
     for resolver in resolvers.values():
         if not isinstance(resolver, DependencyResolver):
@@ -154,7 +178,9 @@ def settle(
 
         if isinstance(typ, type) and issubclass(typ, Injectable):
             resolver.from_factory = False
-            settle(typ.__resolvers__, factories, typ.__name__, (*chain, typ))
+            if resolver.fields is None:
+                resolver.fields = _site_table(typ.__resolvers__)
+            settle(resolver.fields, factories, typ.__name__, (*chain, typ))
             continue
 
         provider = factories.get(typ)
@@ -165,11 +191,12 @@ def settle(
                 f"{typ.__name__} to the object you pass as Fusion(factories=...)."
             )
 
-        if resolver.provider is not None and resolver.provider is not provider:
+        if resolver.provider is not None and resolver.provider.func != provider.func:
             raise ValueError(
-                f"{owner} is already wired by another application, which would leave "
-                f"{typ.__name__} built by whichever constructed it last. A Route belongs to "
-                f"one application - build the routes for each."
+                f"{owner} is already wired by another application whose factory for "
+                f"{typ.__name__} is a different one, which would leave it built by whichever "
+                f"application was constructed last. A Route wired by two sets of factories "
+                f"belongs to one of them - build the routes for each."
             )
 
         resolver.from_factory = True
