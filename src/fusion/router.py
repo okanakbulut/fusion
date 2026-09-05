@@ -3,7 +3,6 @@ import typing
 
 import msgspec
 
-from .protocols import HttpRequest
 from .route import Route
 from .types import Method
 
@@ -89,7 +88,7 @@ class TreeRouter:
         for route in routes:
             self._insert_route(route)
 
-    def _insert_route(self, route: Route[typing.Any, typing.Any]) -> None:
+    def _insert_route(self, route: Route) -> None:
         current_node = self.root
 
         for segment in route.path.strip("/").split("/"):
@@ -100,11 +99,10 @@ class TreeRouter:
 
             current_node = current_node.children[path_segment]
 
-        current_node.routes[route.method] = route
+        for method in route.methods:
+            current_node.routes[method] = route
 
-    def resolve(
-        self, path: str, method: Method
-    ) -> tuple[Route[typing.Any, typing.Any], dict[str, typing.Any]] | None:
+    def resolve(self, path: str, method: Method) -> tuple[Route, dict[str, typing.Any]] | None:
         """Return (route, path_params) for the given path and method, or None."""
         path_params: dict[str, typing.Any] = {}
         path_segments = path.strip("/").split("/")

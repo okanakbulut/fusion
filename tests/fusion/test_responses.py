@@ -1,260 +1,149 @@
-"""Tests for fusion's response types.
-
-Covers Response, Created, NoContent, Problem and its subclasses,
-custom headers, and the renderer utilities.
-"""
+import typing
 
 import pytest
 
-from fusion import Object
-from fusion.renderers import BodyRenderer, CookieRenderer, HeaderRenderer, RenderResult
-from fusion.responses import (
+from fusion import (
     BadRequest,
     Created,
+    FieldError,
     Forbidden,
     InternalServerError,
     MethodNotAllowed,
     NoContent,
     NotFound,
+    Object,
     Problem,
     Response,
     Unauthorized,
     ValidationProblem,
 )
-
-# ---------------------------------------------------------------------------
-# ASGI helpers
-# ---------------------------------------------------------------------------
+from fusion.responses import raw_headers
 
 
-async def _call(response) -> tuple[int, dict[str, str], bytes]:
-    """Call an ASGI response and collect (status, headers, body)."""
-    sent: list[dict] = []
-
-    async def send(msg):
-        sent.append(msg)
-
-    scope: dict = {}
-    receive = None
-    await response(scope, receive, send)
-
-    start = sent[0]
-    body_msg = sent[1]
-    headers = {k.decode(): v.decode() for k, v in start["headers"]}
-    return start["status"], headers, body_msg["body"]
+class Payload(Object):
+    value: int
 
 
-# ---------------------------------------------------------------------------
-# Response
-# ---------------------------------------------------------------------------
+async def render(response) -> tuple[dict, list[dict]]:
+    """Drive a response's ASGI call, returning (start, body messages)."""
+    messages: list[dict] = []
+
+    async def send(message):
+        messages.append(message)
+
+    await response({}, None, send)
+    return messages[0], messages[1:]
 
 
 @pytest.mark.asyncio
-async def test_response_200_with_body():
-    class Out(Object):
-        x: int
+async def test_response_defaults_to_200_json():
+    start, body = await render(Response(Payload(value=1)))
 
-    status, headers, body = await _call(Response(Out(x=1)))
-    assert status == 200
-    assert b'"x":1' in body
-    assert headers["content-type"] == "application/json"
+    assert start["status"] == 200
+    assert dict(start["headers"])[b"content-type"] == b"application/json"
+    assert body[0]["body"] == b'{"value":1}'
 
 
 @pytest.mark.asyncio
-async def test_response_with_custom_headers():
-    class Out(Object):
-        x: int
-
-    r = Response(Out(x=1), headers={"x-request-id": "abc"})
-    _status, headers, _ = await _call(r)
-    assert headers["x-request-id"] == "abc"
+async def test_response_includes_content_length():
+    start, body = await render(Response(Payload(value=1)))
+    assert dict(start["headers"])[b"content-length"] == str(len(body[0]["body"])).encode()
 
 
 @pytest.mark.asyncio
-async def test_response_none_content():
-    status, _, body = await _call(Response(None))
-    assert status == 200
-    assert body == b'""'
-
-
-@pytest.mark.asyncio
-async def test_created_status_201():
-    class Out(Object):
-        id: int
-
-    status, _, _ = await _call(Created(Out(id=42)))
-    assert status == 201
-
-
-@pytest.mark.asyncio
-async def test_no_content_status_204():
-    status, _, _ = await _call(NoContent(None))
-    assert status == 204
-
-
-@pytest.mark.asyncio
-async def test_no_content_sends_empty_body():
-    """HTTP 204 must not include a message body (RFC 7230 §3.3)."""
-    status, headers, body = await _call(NoContent())
-    assert status == 204
-    assert body == b""
-    assert "content-length" not in headers
-
-
-@pytest.mark.asyncio
-async def test_no_content_emits_custom_headers():
-    """204 carries no body, but custom headers still reach the wire."""
-    status, headers, body = await _call(
-        NoContent(headers={"location": "/things/1", "x-trace": "abc"})
+async def test_response_custom_headers_and_media_type():
+    start, _ = await render(
+        Response(Payload(value=1), headers={"x-a": "b"}, media_type="application/x-thing")
     )
-    assert status == 204
-    assert body == b""
-    assert headers["location"] == "/things/1"
-    assert headers["x-trace"] == "abc"
+    headers = dict(start["headers"])
 
-
-# ---------------------------------------------------------------------------
-# Problem (RFC-9457)
-# ---------------------------------------------------------------------------
+    assert headers[b"x-a"] == b"b"
+    assert headers[b"content-type"] == b"application/x-thing"
 
 
 @pytest.mark.asyncio
-async def test_not_found_problem():
-    status, headers, body = await _call(NotFound())
-    assert status == 404
-    assert headers["content-type"] == "application/problem+json"
-    import json
-
-    data = json.loads(body)
-    assert data["type"] == "about:blank"
-    assert data["title"] == "Not Found"
-    assert data["status"] == 404
+async def test_created_is_201():
+    start, _ = await render(Created(Payload(value=1)))
+    assert start["status"] == 201
 
 
 @pytest.mark.asyncio
-async def test_bad_request_with_detail():
-    status, _, body = await _call(BadRequest(detail="invalid input"))
-    assert status == 400
-    import json
-
-    data = json.loads(body)
-    assert data["detail"] == "invalid input"
+async def test_no_content_is_204_with_no_body():
+    start, body = await render(NoContent())
+    assert start["status"] == 204
+    assert body[0]["body"] == b""
+    assert not any(k == b"content-type" for k, _ in start["headers"])
 
 
 @pytest.mark.asyncio
-async def test_unauthorized_problem():
-    status, _, _ = await _call(Unauthorized())
-    assert status == 401
+async def test_no_content_keeps_custom_headers():
+    start, _ = await render(NoContent(headers={"x-a": "b"}))
+    assert dict(start["headers"])[b"x-a"] == b"b"
+
+
+@pytest.mark.parametrize(
+    ("cls", "status", "title"),
+    [
+        (NotFound, 404, "Not Found"),
+        (BadRequest, 400, "Bad Request"),
+        (Unauthorized, 401, "Unauthorized"),
+        (Forbidden, 403, "Forbidden"),
+        (MethodNotAllowed, 405, "Method Not Allowed"),
+        (InternalServerError, 500, "Internal Server Error"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_problem_statuses(cls, status, title):
+    start, body = await render(cls())
+
+    assert start["status"] == status
+    assert dict(start["headers"])[b"content-type"] == b"application/problem+json"
+    assert f'"title":"{title}"'.encode() in body[0]["body"]
 
 
 @pytest.mark.asyncio
-async def test_forbidden_problem():
-    status, _, _ = await _call(Forbidden())
-    assert status == 403
+async def test_problem_body_uses_the_rfc_status_member():
+    """The class attribute is status_code; the wire member stays `status`."""
+    _start, body = await render(NotFound(detail="gone"))
+
+    assert NotFound.status_code == 404
+    assert b'"status":404' in body[0]["body"]
+    assert b'"detail":"gone"' in body[0]["body"]
 
 
 @pytest.mark.asyncio
-async def test_method_not_allowed_problem():
-    status, _, _ = await _call(MethodNotAllowed())
-    assert status == 405
+async def test_validation_problem_includes_errors():
+    problem = ValidationProblem(
+        detail="bad", errors=[FieldError(field="a", location="query", message="m")]
+    )
+    _, body = await render(problem)
 
-
-@pytest.mark.asyncio
-async def test_internal_server_error_problem():
-    status, _, _ = await _call(InternalServerError())
-    assert status == 500
+    assert b'"errors"' in body[0]["body"]
+    assert b'"field":"a"' in body[0]["body"]
 
 
 @pytest.mark.asyncio
 async def test_custom_problem_subclass():
-    class OutOfStock(Problem):
-        type: str = "https://example.com/out-of-stock"
-        status: int = 409
-        title: str = "Out of Stock"
+    class Teapot(Problem):
+        type: typing.ClassVar[str] = "https://example.com/teapot"
+        status_code: typing.ClassVar[int] = 418
+        title: str = "I'm a teapot"
 
-    status, _, body = await _call(OutOfStock(detail="item #1 unavailable"))
-    assert status == 409
-    import json
+    start, body = await render(Teapot(detail="short and stout"))
 
-    data = json.loads(body)
-    assert data["type"] == "https://example.com/out-of-stock"
+    assert start["status"] == 418
+    assert b"https://example.com/teapot" in body[0]["body"]
 
 
-@pytest.mark.asyncio
-async def test_validation_error_includes_field_errors():
-    from fusion.responses import FieldError
-
-    r = ValidationProblem(
-        detail="failed",
-        errors=[FieldError(field="email", location="body", message="invalid")],
-    )
-    _, _, body = await _call(r)
-    import json
-
-    data = json.loads(body)
-    assert data["errors"] == [{"field": "email", "location": "body", "message": "invalid"}]
+def test_raw_headers_omits_content_length_when_unknown():
+    headers = raw_headers("text/event-stream", None, None)
+    assert headers == [(b"content-type", b"text/event-stream")]
 
 
-@pytest.mark.asyncio
-async def test_problem_with_instance():
-    r = BadRequest(detail="x", instance="/api/users/1")
-    _, _, body = await _call(r)
-    import json
-
-    data = json.loads(body)
-    assert data["instance"] == "/api/users/1"
-
-
-# ---------------------------------------------------------------------------
-# Renderers
-# ---------------------------------------------------------------------------
-
-
-def test_body_renderer():
-    class Item(Object):
-        value: int
-
-    item = Item(value=7)
-    r: RenderResult = BodyRenderer(attr_name="value", attr_type=int).render(item)
-    assert r.body is not None
-    assert b"7" in r.body
-    assert r.headers is not None
-    assert any(b"application/json" in v for _, v in r.headers)
-
-
-def test_header_renderer_with_value():
-    class Item(Object):
-        token: str
-
-    item = Item(token="abc")
-    r: RenderResult = HeaderRenderer(attr_name="token", attr_type=str).render(item)
-    assert r.headers is not None
-    assert r.headers[0] == (b"token", b"abc")
-
-
-def test_header_renderer_without_value():
-    class Item(Object):
-        token: str | None = None
-
-    item = Item()
-    r: RenderResult = HeaderRenderer(attr_name="token", attr_type=str).render(item)
-    assert r.headers is None
-
-
-def test_cookie_renderer_with_value():
-    class Item(Object):
-        session: str
-
-    item = Item(session="xyz")
-    r: RenderResult = CookieRenderer(attr_name="session", attr_type=str).render(item)
-    assert r.cookies is not None
-    assert r.cookies[0] == (b"session", b"xyz")
-
-
-def test_cookie_renderer_without_value():
-    class Item(Object):
-        session: str | None = None
-
-    item = Item()
-    r: RenderResult = CookieRenderer(attr_name="session", attr_type=str).render(item)
-    assert r.cookies is None
+def test_raw_headers_appends_custom_headers():
+    headers = raw_headers("application/json", {"x-a": "b"}, 3)
+    assert headers == [
+        (b"content-type", b"application/json"),
+        (b"content-length", b"3"),
+        (b"x-a", b"b"),
+    ]

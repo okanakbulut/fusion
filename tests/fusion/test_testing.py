@@ -1,74 +1,111 @@
-"""Tests for fusion.testing — the LifespanManager and TestClient helpers."""
-
 import contextlib
 
 import pytest
 
-from fusion import Fusion, Handler, Object, Request, Response, Route
+from fusion import Fusion, Get, Object, Response
 from fusion.testing import LifespanManager, TestClient
 
 
-class _Ok(Object):
-    ok: bool
+class Out(Object):
+    value: str
 
 
-class _OkHandler(Handler):
-    async def handle(self, request: Request) -> Response[_Ok]:
-        return Response(_Ok(ok=True))
+async def handler() -> Response[Out]:
+    return Response(Out(value="ok"))
 
 
 @pytest.mark.asyncio
-async def test_test_client_runs_request_through_lifespan():
-    startup_done = False
-
-    @contextlib.asynccontextmanager
-    async def lifespan(app):
-        nonlocal startup_done
-        startup_done = True
-        yield {"key": "val"}
-
-    app = Fusion(routes=[Route("/", methods=["GET"], handler=_OkHandler)], lifespan=lifespan)
-
+async def test_test_client_drives_the_app():
+    app = Fusion(routes=[Get("/x", handler)])
     async with TestClient(app) as client:
-        r = await client.get("/")
+        response = await client.get("/x")
 
-    assert r.status_code == 200
-    assert startup_done
+    assert response.status_code == 200
+    assert response.json() == {"value": "ok"}
 
 
 @pytest.mark.asyncio
-async def test_lifespan_manager_provides_state():
+async def test_test_client_runs_the_lifespan():
+    events: list[str] = []
+
     @contextlib.asynccontextmanager
     async def lifespan(app):
-        yield {"db": "connected"}
+        events.append("up")
+        yield {"k": "v"}
+        events.append("down")
+
+    app = Fusion(routes=[Get("/x", handler)], lifespan=lifespan)
+    async with TestClient(app) as client:
+        await client.get("/x")
+
+    assert events == ["up", "down"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_state_reaches_the_scope():
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        yield {"answer": 42}
+
+    seen = {}
+
+    async def peek(request: FromContext[Request]) -> Response[Out]:
+        seen.update(request.scope.get("state", {}))
+        return Response(Out(value="ok"))
+
+    from fusion import Request
+    from fusion.annotations import FromContext
+
+    peek.__annotations__["request"] = FromContext[Request]
+
+    app = Fusion(routes=[Get("/x", peek)], lifespan=lifespan)
+    async with TestClient(app) as client:
+        await client.get("/x")
+
+    assert seen == {"answer": 42}
+
+
+@pytest.mark.asyncio
+async def test_lifespan_manager_exposes_state():
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        yield {"ready": True}
 
     app = Fusion(routes=[], lifespan=lifespan)
-
     async with LifespanManager(app) as manager:
-        assert manager.state["db"] == "connected"
+        assert manager.state == {"ready": True}
 
 
 @pytest.mark.asyncio
-async def test_lifespan_manager_startup_failed_raises():
-    async def bad_app(scope, receive, send):
-        await receive()  # lifespan.startup
-        await send({"type": "lifespan.startup.failed", "message": "db down"})
-
-    with pytest.raises(RuntimeError, match="Lifespan startup failed"):
-        async with LifespanManager(bad_app):
-            pass
+async def test_test_client_accepts_a_base_url():
+    app = Fusion(routes=[Get("/x", handler)])
+    async with TestClient(app, base_url="http://example.test") as client:
+        assert str(client.base_url) == "http://example.test"
 
 
 @pytest.mark.asyncio
-async def test_lifespan_manager_shutdown_failed_raises():
-    async def flaky_app(scope, receive, send):
-        msg = await receive()
-        if msg["type"] == "lifespan.startup":
+async def test_lifespan_manager_reports_a_failed_shutdown():
+    from fusion.types import Message
+
+    class Broken:
+        async def __call__(self, scope, receive, send):
+            await receive()
             await send({"type": "lifespan.startup.complete"})
-        msg = await receive()
-        if msg["type"] == "lifespan.shutdown":
-            await send({"type": "lifespan.shutdown.failed", "message": "error"})
+            await receive()
+            await send({"type": "lifespan.shutdown.failed", "message": "nope"})
 
-    with pytest.raises(RuntimeError, match="Lifespan shutdown failed"):
-        async with LifespanManager(flaky_app):
+    with pytest.raises(RuntimeError, match="shutdown failed"):
+        async with LifespanManager(Broken()):
             pass
+
+
+@pytest.mark.asyncio
+async def test_lifespan_manager_reports_a_failed_startup():
+    class Broken:
+        async def __call__(self, scope, receive, send):
+            await receive()
+            await send({"type": "lifespan.startup.failed", "message": "nope"})
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        async with LifespanManager(Broken()):
+            pass  # pragma: no cover
